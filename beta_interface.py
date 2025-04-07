@@ -1,5 +1,18 @@
 import time
 
+
+#Odkladový prostor
+
+def shotScreen(O_device):
+        # Set screenshot format (BMP, PNG, or JPG)
+    temp_values = O_device.query_binary_values(':HCOPy:SDUMp:DATA?','s',False)
+    # Save it as a file on the PC
+
+    with open('screenshot.png', 'wb') as file:
+        file.write(bytearray(temp_values))
+
+    #rint("Screenshot saved as 'screenshot.png'")
+
 # Dummy VISA replacement
 class DummyInstrument:
     def __init__(self, name):

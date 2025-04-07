@@ -10,6 +10,14 @@ def Rampa(Devs,chs,Vs):
     amps = steps
     tim = 0
     print(steps)
+
+
+    
+
+
+
+
+
     while tim <= r_time:
         
         print(Devs[0])
