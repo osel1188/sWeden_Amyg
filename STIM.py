@@ -127,8 +127,8 @@ def DevSet(O_device):
 Cond = str(input("put SHAM or STIM::\n ->")).upper().strip()
 rm = visa.ResourceManager()
 
-EDU_Master = rm.open_resource('USB0::0x2A8D::0x8D01::CN60450055::0::INSTR')
-EDU_Slave_1 = rm.open_resource('USB0::0x2A8D::0x8D01::CN64050190::0::INSTR')
+EDU_Master = rm.open_resource('USB0::0x2A8D::0x8D01::CN64050087::0::INSTR')
+EDU_Slave_1 = rm.open_resource('USB0::0x2A8D::0x8D01::CN62490141::0::INSTR')
 
 
 
@@ -210,7 +210,6 @@ EDU_Slave_1.write(':OUTPut%d:STATe %d' % (OUTPut_num_2, state))
 time.sleep(1)
 
 print("\033[95m🔬 Amplitude vectors aligned. Stimulation system standing by.\033[0m")
-
 
 while state != 'f':
     state = input("[Press [s] to start stimulation, [e] to end stimulation, [b] to beep, [q] to (quit)]   [s/e/b/q][start/end/beep/quit]:: ")
