@@ -249,6 +249,12 @@ while state != 'f':
         print("\033[33mRamping up finished\033[0m")
         
     elif state == "e":
+        current_values = [float(EDU_Master.query('SOUR1:VOLT?')),float(EDU_Master.query('SOUR2:VOLT?'))]
+        if any(x <= 0.003 for x in current_values):
+            print("Cant ramp down from zero amplitude as starting point!")
+            for val in current_values:
+                print(f"Value:: {val}")
+            continue
         print("Ramping down start")
 
         
