@@ -32,10 +32,6 @@ class StimulationController_withGUI(StimulationController):
         self._status_update_func = self._print_status_fallback # Default if GUI not ready
         self._enable_keyboard_shortcut = enable_keyboard_shortcut
 
-    def _print_status_fallback(self, message, level="info"):
-        """Fallback status update if GUI isn't ready."""
-        print(f"[{level.upper()}] {message}")
-
     def run(self):
         """Starts the GUI application."""
         self.root = tk.Tk()
@@ -228,19 +224,12 @@ class StimulationController_withGUI(StimulationController):
 
 
     # --- Overridden Methods from StimulationController ---
-
-    def start_stimulation(self):
-        """ Override to update GUI status """
-        self._status_update_func("Attempting to start stimulation...", "info")
-        super().start_stimulation() # Call original logic
-        # GUI button state updated by the thread completion handlers
-
-
-    def end_stimulation(self):
-        """ Override to update GUI status """
-        self._status_update_func("Attempting to end stimulation...", "info")
-        super().end_stimulation() # Call original logic
-        # GUI button state updated by the thread completion handlers
+    def _ramp_voltage(self, target_voltages, duration, preview=True, disable_keyboard_interrupt=True):
+        """ Override cleanup to potentially update GUI before parent logic """
+        self._status_update_func("Initiating shutdown sequence...", "info")
+        # Parent cleanup handles ramp down, disconnect etc. It will call end_stimulation
+        # which calls _ramp_voltage, which updates the GUI.
+        super()._ramp_voltage(target_voltages, duration, preview=preview, disable_keyboard_interrupt=disable_keyboard_interrupt)
 
     def emergency_stop(self, is_error=False):
         """ Override to update GUI state and handle exit """
@@ -282,83 +271,6 @@ class StimulationController_withGUI(StimulationController):
 
         # Don't call os._exit here; let the GUI close normally if possible.
         # If called from background thread, os._exit might still be necessary.
-
-
-    def _ramp_voltage(self, target_voltages, duration):
-        """ Override ramp to update GUI status during ramp """
-        if duration <= 0:
-             # Handle instant set (less critical to update GUI frequently)
-             super()._ramp_voltage(target_voltages, duration)
-             self._status_update_func(f"Voltage set instantly to: {self.current_voltages}", "ramp")
-             return
-
-        time_step_s = self.config['ramp']['time_step_ms'] / 1000.0
-        num_steps = int(duration / time_step_s)
-        if num_steps < 1: num_steps = 1
-
-        start_voltages = np.copy(self.current_voltages)
-        voltage_steps = (np.array(target_voltages) - start_voltages) / num_steps
-        is_ramping_up = np.any(target_voltages > start_voltages)
-        ramp_direction = "UP" if is_ramping_up else "DOWN"
-        self._status_update_func(f"Starting ramp {ramp_direction} to {target_voltages} over {duration}s...", "ramp")
-
-        spinner = ['◜', '◝', '◞', '◟']
-        last_update_time = time.time()
-
-        for i in range(num_steps):
-            if self.emergency_stop_triggered:
-                self._status_update_func("Ramp interrupted by emergency stop.", "warning")
-                break
-
-            step_start_time = time.perf_counter()
-
-            # --- Calculate and Apply Voltages (from original method) ---
-            next_voltages = start_voltages + (voltage_steps * (i + 1))
-            for ch_idx in range(len(next_voltages)):
-                v = max(0, next_voltages[ch_idx])
-                self.current_voltages[ch_idx] = v
-                try:
-                    device, source_num = self._get_device_by_channel(ch_idx)
-                    device.set_voltage(source_num, v)
-                except Exception as e:
-                    self._status_update_func(f"VISA Error setting voltage on channel {ch_idx+1}: {e}", "error")
-                    self.emergency_stop(is_error=True)
-                    return # Exit ramp
-
-            # --- Update GUI Status Periodically ---
-            current_time = time.time()
-            if current_time - last_update_time > 0.25: # Update GUI ~4 times/sec
-                 progress = (i + 1) / num_steps * 100
-                 # Display first channel voltage as an example
-                 v_disp = self.current_voltages[0]
-                 status_msg = f"Ramping {ramp_direction}... {spinner[i%4]} {progress:.1f}% (Ch1: {v_disp:.2f}V)"
-                 self._status_update_func(status_msg, "ramp")
-                 last_update_time = current_time
-
-            # --- Sleep ---
-            elapsed_step = time.perf_counter() - step_start_time
-            sleep_time = max(0, time_step_s - elapsed_step)
-            time.sleep(sleep_time)
-
-
-        # --- Final Update ---
-        if not self.emergency_stop_triggered:
-             # Set final exact voltages
-             for ch_idx, target_v in enumerate(target_voltages):
-                  v = max(0, target_v)
-                  self.current_voltages[ch_idx] = v
-                  try:
-                      device, source_num = self._get_device_by_channel(ch_idx)
-                      device.set_voltage(source_num, v)
-                  except Exception as e:
-                      self._status_update_func(f"VISA Error setting final voltage on channel {ch_idx+1}: {e}", "error")
-                      self.emergency_stop(is_error=True)
-                      return # Exit
-
-             self._status_update_func(f"Ramp {ramp_direction} finished. Voltages: {self.current_voltages}", "success")
-        else:
-             self._status_update_func("Ramp stopped prematurely.", "warning")
-
 
     def cleanup(self):
         """ Override cleanup to potentially update GUI before parent logic """

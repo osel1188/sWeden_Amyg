@@ -10,7 +10,7 @@ class KeysightEDU:
     """
     Represents and controls a Keysight EDU function generator.
     """
-    def __init__(self, resource_name, config):
+    def __init__(self, resource_name, config,  name=""):
         """
         Initializes the KeysightEDU device.
 
@@ -18,10 +18,13 @@ class KeysightEDU:
             resource_name (str): The VISA resource name (e.g., 'USB0::...')
             config (dict): Configuration dictionary for device defaults.
         """
+        self.name = name
         self.resource_name = resource_name
         self.config = config
         self.instrument = None
         self.rm = visa.ResourceManager()
+        self.write('*RST') # Start fresh
+        time.sleep(1.00)
         logging.info(f"KeysightEDU object created for resource: {self.resource_name}")
 
     def connect(self):
@@ -73,7 +76,7 @@ class KeysightEDU:
             logging.warning(f"Cannot write '{command}': Device {self.resource_name} not connected.")
             return
         try:
-            if verbose: print(command)
+            if verbose: print(f"{self.name}: {command}")
 
             # logging.debug(f"WRITE to {self.resource_name}: {command}")
             self.instrument.write(command)
@@ -170,16 +173,16 @@ class KeysightEDU:
         burst_state = defaults_config.get('burst_state', True)
         burst_mode = defaults_config.get('burst_mode', 'TRIGgered')
         burst_phase = defaults_config.get('burst_phase', 0)
-
+        
+        #self.write('*RST') # Start fresh
         for i in self.config.get('source_channels', [1, 2]):
             out_num = i # Assuming output number matches source number for these commands
             # Ensure output is off before changing settings
             self.set_output_state(out_num, False)
             time.sleep(0.05)
-
+            
             self.write(f':OUTPut{out_num}:LOAD {load}')
             self.write(f':SOURce{i}:FUNCtion {func}')
-            #self.write(f':SOURce{i}:BURSt:MODE GAT')
             self.write(f':SOURce{i}:BURSt:NCYCles {burst_cycles}')
             self.write(f':SOURce{i}:BURSt:STATe {1 if burst_state else 0}')
             self.write(f':SOURce{i}:BURSt:MODE {burst_mode}')

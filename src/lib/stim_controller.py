@@ -4,6 +4,7 @@ import time
 import threading
 import keyboard
 import numpy as np
+import matplotlib.pyplot as plt
 import os
 import sys
 import logging
@@ -51,6 +52,12 @@ class StimulationController:
         self.emergency_stop_triggered = False
         self._keyboard_listener_thread = None
         self._stop_listener_flag = threading.Event()
+        self._status_update_func = self._print_status_fallback # Default if GUI not ready
+
+
+    def _print_status_fallback(self, message, level="info"):
+        """Fallback status update if GUI isn't ready."""
+        print(f"[{level.upper()}] {message}")
 
     def _load_config(self, config_path):
         """Loads configuration from a JSON file."""
@@ -95,9 +102,9 @@ class StimulationController:
              resource = conf.get('resource_name')
              if resource:
                  if is_mock_up:
-                    devices[name] = KeysightEDUMockup(resource, conf) 
+                    devices[name] = KeysightEDUMockup(resource, conf, name=name) 
                  else:
-                    devices[name] = KeysightEDU(resource, conf)
+                    devices[name] = KeysightEDU(resource, conf, name=name)
              else:
                  logging.warning(f"Resource name missing for device '{name}' in config.")
         return devices
@@ -226,7 +233,7 @@ class StimulationController:
         return True
 
 
-    def ramp_voltage_1chan(self, chan, voltage, duration, rate, initialise=False, close_after=False):
+    def ramp_voltage_1chan(self, chan, voltage, duration, rate, initialise=False, terminate=False):
         """ Ramps voltages smoothly across all channels. """
         if rate is not None and  rate <= 0:
             logging.warning("Ramp rate must be positive. No ramp up was made.")
@@ -253,6 +260,9 @@ class StimulationController:
 
         start_voltage = float(np.copy(self.current_voltages[ch_idx]))
         voltage_gap = voltage - start_voltage
+        if voltage_gap == 0:
+            logging.warning("ramp voltage 1 channel: Target voltage is equal to current voltage, skipping the ramping process...")
+            return
 
         if rate is not None:
             voltage_step = np.sign(voltage_gap) * rate * time_step_s
@@ -275,10 +285,10 @@ class StimulationController:
 
         if initialise:
             dev.set_output_state(channel_info['source'], True)
-            time.sleep(0.5) # Allow outputs to stabilize
+            time.sleep(1.0) # Allow outputs to stabilize
             logging.info(f"Output {channel_info['device']}:{channel_info['source']} enabled.")
             self.devices.get('master').trigger()
-            time.sleep(0.1) # Short delay after trigger before ramping
+            time.sleep(0.5) # Short delay after trigger before ramping
 
         spinner = ['◜', '◝', '◞', '◟']
         start_time = time.time()
@@ -297,7 +307,7 @@ class StimulationController:
                 # Clamp voltages to be non-negative and apply
                 v = max(0, next_voltage) # Ensure non-negative
                 self.current_voltages[ch_idx] = v # Update internal state *before* sending
-                sys.stdout.write(f'\r Ramping ..... {spinner[i%4]} {progress:.1f}%: voltage = {v} V')
+                sys.stdout.write(f'Ramping ..... {spinner[i%4]} {progress:.1f}%: voltage = {v} V\n')
 
                 try:
                     dev.set_voltage(channel_info['source'], v)
@@ -327,17 +337,6 @@ class StimulationController:
             else:
                  print("\n Ramp stopped prematurely.")
 
-            if close_after:
-                dev.set_output_state(channel_info['source'], False)
-                time.sleep(.5)
-                logging.info(f"Output {channel_info['device']}:{channel_info['source']} disabled.")
-                dev.write('*WAI')
-                time.sleep(.5)
-                self.devices.get('master').write(f':ABORt')
-                logging.info(f"Master trigger disabled.")
-                time.sleep(0.1) # Short delay 
-
-
         except KeyboardInterrupt:
              print("\n Ramp interrupted by user (Ctrl+C).")
              self.emergency_stop() # Treat Ctrl+C during ramp as emergency
@@ -346,83 +345,220 @@ class StimulationController:
              self.emergency_stop()
         finally:
             sys.stdout.flush() # Ensure prompt is clean
+        
+        if terminate:
+            dev.set_output_state(channel_info['source'], False)
+            time.sleep(.5)
+            logging.info(f"Output {channel_info['device']}:{channel_info['source']} disabled.")
+            # dev.write('*WAI')
+            time.sleep(.5)
+            self.devices.get('master').write(f':ABORt')
+            
+            # Abort triggers on both devices
+            self.devices.get('master').abort()
+            logging.info(f"Master trigger disabled.")
+            time.sleep(1.0)
+
+            # Clear device status
+            dev.clear()
+            self.devices.get('master').clear()
+            time.sleep(0.5) # Short delay 
 
 
-    def _ramp_voltage(self, target_voltages, duration):
-        """ Ramps voltages smoothly across all channels. """
+    def _ramp_voltage(self, target_voltages, duration, preview=True, disable_keyboard_interrupt=False):
+        """
+        Ramps voltages smoothly across all channels, optionally plotting trajectories.
+
+        Args:
+            target_voltages (list or np.array): Target voltages for each channel.
+            duration (float): Total duration of the ramp in seconds.
+            preview (bool, optional): If True, plot the voltage trajectories before starting. Defaults to True.
+            disable_keyboard_interrupt (bool, optional): If True, KeyboardInterrupt will not be caught
+                                                          within this function. Defaults to False.
+        """
         if duration <= 0:
-             logging.warning("Ramp duration must be positive. No ramp up was made.")
+            logging.warning("Ramp duration must be positive. No ramp up was made.")
+            self._status_update_func("Ramp duration must be positive.", "warning")
+            return
+
+        if len(target_voltages) != len(self.current_voltages):
+             logging.error(f"Target voltages length ({len(target_voltages)}) mismatch with current voltages length ({len(self.current_voltages)}).")
+             self._status_update_func("Target voltages length mismatch.", "error")
              return
 
         time_step_s = self.config['ramp']['time_step_ms'] / 1000.0
         num_steps = int(duration / time_step_s)
         if num_steps < 1: num_steps = 1 # Ensure at least one step
+        # Adjust time_step_s slightly if duration isn't a perfect multiple
+        actual_time_step_s = duration / num_steps
 
         start_voltages = np.copy(self.current_voltages)
-        voltage_steps = (np.array(target_voltages) - start_voltages) / num_steps
+        target_voltages_arr = np.array(target_voltages)
+        # Ensure target voltages are non-negative
+        target_voltages_arr = np.maximum(target_voltages_arr, 0)
 
+        voltage_deltas = target_voltages_arr - start_voltages
+        voltage_steps = voltage_deltas / num_steps
+
+        is_ramping_up = np.any(target_voltages_arr > start_voltages)
+        ramp_direction = "UP" if is_ramping_up else "DOWN"
+        target_voltages_str = ", ".join([f"{v:.2f}V" for v in target_voltages_arr])
+        self._status_update_func(f"Preparing ramp {ramp_direction} to [{target_voltages_str}] over {duration}s...", "info")
+
+        # Generate time vector (dt is represented by the time points in t)
+        # Include the start time (0) and end time (duration)
+        t = np.linspace(0, duration, num_steps + 1)
+
+        # Generate voltage trajectories for each channel
+        # Shape: (num_channels, num_steps + 1)
+        voltage_trajectories = np.zeros((len(start_voltages), num_steps + 1))
+        for i in range(num_steps + 1):
+             # Calculate voltage at step i, ensuring non-negative values
+            step_voltage = start_voltages + voltage_steps * i
+            voltage_trajectories[:, i] = np.maximum(step_voltage, 0) # Clamp intermediate steps too
+        # Ensure the final voltage is exactly the target (clamped)
+        voltage_trajectories[:, -1] = target_voltages_arr
+
+        if preview:
+            plt.figure(figsize=(10, 6))
+            for ch_idx in range(len(start_voltages)):
+                plt.plot(t, voltage_trajectories[ch_idx, :], label=f'Channel {ch_idx + 1}')
+            plt.title(f'Voltage Ramp Trajectories ({ramp_direction})')
+            plt.xlabel('Time (s)')
+            plt.ylabel('Voltage (V)')
+            plt.legend()
+            plt.grid(True)
+            plt.ylim(bottom=0) # Ensure y-axis starts at 0
+            plt.tight_layout()
+            print("Displaying voltage ramp preview plot...")
+            plt.show(block=True) # Display the plot - this blocks execution until closed
+
+        # --- Ramp Execution ---
+        self._status_update_func(f"Starting ramp {ramp_direction}...", "ramp")
+        self.emergency_stop_triggered = False # Reset emergency stop flag before ramp
+
+        ramp_proc = self._execute_ramp # Put ramp logic in separate method for clarity
+        if disable_keyboard_interrupt:
+            # Execute directly, allowing KeyboardInterrupt to propagate
+            ramp_proc(voltage_trajectories, actual_time_step_s)
+        else:
+            # Wrap in try-except to catch KeyboardInterrupt
+            try:
+                ramp_proc(voltage_trajectories, actual_time_step_s)
+            except KeyboardInterrupt:
+                print("\n Ramp interrupted by user (Ctrl+C).")
+                sys.stdout.flush()
+                self.emergency_stop(is_error=False) # Treat Ctrl+C during ramp as emergency stop
+            except Exception as e:
+                # Catch other potential errors during the ramp loop itself
+                logging.error(f"Unexpected error during ramp execution: {e}", exc_info=True)
+                self._status_update_func(f"Unexpected error during ramp: {e}", "error")
+                self.emergency_stop(is_error=True)
+            finally:
+                 sys.stdout.flush() # Ensure prompt is clean after loop finishes or breaks
+
+
+    def _execute_ramp(self, voltage_trajectories, time_step_s):
+        """ Contains the core loop for executing the voltage ramp. """
         spinner = ['◜', '◝', '◞', '◟']
+        num_channels, num_steps = voltage_trajectories.shape
         start_time = time.time()
-
-        logging.info(f"Starting ramp to {target_voltages} over {duration}s...")
         try:
             for i in range(num_steps):
                 if self.emergency_stop_triggered:
+                    self._status_update_func("Ramp interrupted by emergency stop.", "warning")
                     logging.warning("Ramp interrupted by emergency stop.")
-                    break
+                    break # Exit the loop cleanly
 
                 step_start_time = time.perf_counter() # More precise timer for sleep calculation
 
-                sys.stdout.flush()
-                progress = (i + 1) / num_steps * 100
-                sys.stdout.write(f'\r Ramping ..... {spinner[i%4]} {progress:.1f}% ')
+                # Get the target voltages for this specific step from pre-calculated trajectory
+                # Use index i+1 because trajectory includes the starting point at index 0
+                next_voltages_step = voltage_trajectories[:, i]
 
-                next_voltages = start_voltages + (voltage_steps * (i + 1))
-                # Clamp voltages to be non-negative and apply
-                for ch_idx in range(len(next_voltages)):
-                    v = max(0, next_voltages[ch_idx]) # Ensure non-negative
-                    self.current_voltages[ch_idx] = v # Update internal state *before* sending
-                    try:
+                # Apply voltages for this step
+                try:
+                    for ch_idx in range(num_channels):
+                        v = voltage_trajectories[ch_idx, i] # Already clamped to non-negative
+                        # Update internal state *before* sending command
+                        self.current_voltages[ch_idx] = v
+                        # --- Hardware Interaction ---
                         device, source_num = self._get_device_by_channel(ch_idx)
-                        device.set_voltage(source_num, v)
-                    except Exception as e:
-                        logging.error(f"Error setting voltage on channel {ch_idx+1}: {e}")
-                        # Decide how to handle: stop ramp, skip channel, etc.
-                        self.emergency_stop() # Safest option
-                        return # Exit ramp function
+                        if device: # Check if device retrieval was successful
+                           device.set_voltage(source_num, v)
+                        else:
+                            logging.error(f"Could not get device for channel {ch_idx+1}. Skipping voltage set.")
+                            # Optionally trigger emergency stop or raise an error
+                            raise RuntimeError(f"Device not found for channel {ch_idx+1}")
+                        
+                        # --------------------------
+
+                except Exception as e:
+                    logging.error(f"Error setting voltage on channel {ch_idx+1} during step {i}: {e}", exc_info=True)
+                    self._status_update_func(f"VISA Error setting voltage on channel {ch_idx+1}: {e}", "error")
+                    self.emergency_stop(is_error=True) # Trigger emergency stop on hardware error
+                    return # Exit ramp function immediately
+
+                # --- Progress Update ---
+                progress = (i + 1) / num_steps * 100
+                # Ensure the cursor is returned to the beginning of the line (\r)
+                # and clear the rest of the line ( K) before writing new progress
+                sys.stdout.write(f'\r\033[K Ramping ..... {spinner[i % 4]} {progress:.1f}% \n')
+                sys.stdout.flush()
 
 
-                # Calculate sleep time to maintain overall duration
+                # --- Timing Control ---
+                # Calculate sleep time needed to maintain the average step duration
                 elapsed_step = time.perf_counter() - step_start_time
                 sleep_time = max(0, time_step_s - elapsed_step)
                 time.sleep(sleep_time)
 
-            # Final step: Ensure exact target voltage is set
+            # --- Final Step ---
+            # After the loop, ensure the exact final target voltage is set if not stopped
             if not self.emergency_stop_triggered:
-                 sys.stdout.write(f'\r Ramping ..... Done. 100.0% \n')
-                 for ch_idx, target_v in enumerate(target_voltages):
-                     v = max(0, target_v)
-                     self.current_voltages[ch_idx] = v
-                     try:
-                          device, source_num = self._get_device_by_channel(ch_idx)
-                          device.set_voltage(source_num, v)
-                     except Exception as e:
-                          logging.error(f"Error setting final voltage on channel {ch_idx+1}: {e}")
-                          self.emergency_stop()
-                 logging.info(f"Ramp finished in {time.time() - start_time:.2f}s. Final Voltages: {self.current_voltages}")
+                final_voltages = voltage_trajectories[:, -1] # Get the last column (target voltages)
+                sys.stdout.write(f'\r\033[K Ramping ..... Done. 100.0% \n') # Clear line and print final status
+                sys.stdout.flush()
+                try:
+                    for ch_idx, target_v in enumerate(final_voltages):
+                        # Update internal state
+                        self.current_voltages[ch_idx] = target_v
+                        # --- Hardware Interaction ---
+                        device, source_num = self._get_device_by_channel(ch_idx)
+                        if device:
+                            device.set_voltage(source_num, target_v)
+                        else:
+                             logging.error(f"Could not get device for channel {ch_idx+1} for final set.")
+                             raise RuntimeError(f"Device not found for channel {ch_idx+1} (final set)")
+                        # --------------------------
+                    final_voltages_str = ", ".join([f"{v:.2f}V" for v in self.current_voltages])
+                    logging.info(f"Ramp finished in {time.time() - start_time:.2f}s. Final Voltages: [{final_voltages_str}]")
+                    self._status_update_func(f"Ramp finished. Voltages: [{final_voltages_str}]", "success")
 
-            else:
-                 print("\n Ramp stopped prematurely.")
+                except Exception as e:
+                    logging.error(f"Error setting final voltage on channel {ch_idx+1}: {e}", exc_info=True)
+                    self._status_update_func(f"VISA Error setting final voltage on channel {ch_idx+1}: {e}", "error")
+                    self.emergency_stop(is_error=True) # Trigger emergency stop
+                    return # Exit ramp function
+
+            else: # Ramp was stopped prematurely
+                 # Current voltages should reflect the last successfully set values
+                 current_voltages_str = ", ".join([f"{v:.2f}V" for v in self.current_voltages])
+                 self._status_update_func(f"Ramp stopped prematurely. Current Voltages: [{current_voltages_str}]", "warning")
+                 logging.warning(f"Ramp stopped prematurely. Voltages left at: [{current_voltages_str}]")
+                 # Ensure the line is cleared after the loop finishes or breaks
+                 sys.stdout.write('\r\033[K')
+                 sys.stdout.flush()
 
 
-        except KeyboardInterrupt:
-             print("\n Ramp interrupted by user (Ctrl+C).")
-             self.emergency_stop() # Treat Ctrl+C during ramp as emergency
-        except Exception as e:
-             logging.error(f"Unexpected error during ramp: {e}")
-             self.emergency_stop()
+        # Note: General Exception handling (like the outer one for KeyboardInterrupt)
+        # should happen in the caller function (_ramp_voltage) which decides
+        # whether to catch KeyboardInterrupt or not.
+        # This function focuses solely on executing the steps.
         finally:
-            sys.stdout.flush() # Ensure prompt is clean
+             # Ensure the line is cleared after the loop finishes or breaks, regardless of how it exits
+             sys.stdout.write('\r\033[K')
+             sys.stdout.flush()
 
 
     def start_stimulation(self):
@@ -453,10 +589,7 @@ class StimulationController:
             slave.set_output_state(1, True)
             slave.set_output_state(2, True)
             logging.info("Outputs enabled.")
-            time.sleep(0.5) # Allow outputs to stabilize
-            master.wait_WAI()
-            slave.wait_WAI()
-            time.sleep(0.5) # Allow outputs to stabilize
+            time.sleep(1.5) # Allow outputs to stabilize
             
             # Send software trigger to Master
             master.trigger()
@@ -531,9 +664,7 @@ class StimulationController:
         try:
             master.beep()
             slave.beep()
-            master.wait_OPC() # Ensure beep command sent before next
-            slave.wait_OPC()
-            time.sleep(0.15)
+            time.sleep(5.0)
             master.beep()
             slave.beep()
         except Exception as e:
