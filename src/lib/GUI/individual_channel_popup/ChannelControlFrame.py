@@ -64,7 +64,7 @@ class ChannelControlFrame(ttk.Frame):
 
         # --- Widget Variables for this channel ---
         self.target_voltage_var = tk.StringVar()
-        self.ramp_parameter_choice = tk.StringVar(value="duration") # 'duration' or 'rate'
+        self.ramp_parameter_choice = tk.StringVar(value="rate") # 'duration' or 'rate'
         self.duration_var = tk.StringVar()
         self.rate_var = tk.StringVar()
         self.current_voltage_var = tk.StringVar(value="?.?? V") # Variable for current voltage display
@@ -173,9 +173,10 @@ class ChannelControlFrame(ttk.Frame):
         else:
             # Set default/placeholder values if no initial data provided
             self.target_voltage_var.set(f"{random.uniform(1.0, min(5.0, self.max_voltage)):.1f}")
-            self.duration_var.set("1.0")
-            self.rate_var.set("") # Clear rate if duration is default
-            self.ramp_parameter_choice.set("duration")
+            self.target_voltage_var.set(f"3.0")
+            self.duration_var.set("")
+            self.rate_var.set("0.1") # Clear rate if duration is default
+            self.ramp_parameter_choice.set("rate")
             self.saved_data = None # No saved data initially
             self.set_save_state_led('red') # Default to red
 

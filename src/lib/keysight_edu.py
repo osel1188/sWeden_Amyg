@@ -23,8 +23,6 @@ class KeysightEDU:
         self.config = config
         self.instrument = None
         self.rm = visa.ResourceManager()
-        self.write('*RST') # Start fresh
-        time.sleep(1.00)
         logging.info(f"KeysightEDU object created for resource: {self.resource_name}")
 
     def connect(self):
@@ -36,6 +34,10 @@ class KeysightEDU:
             self.clear()
             identity = self.query("*IDN?")
             logging.info(f"Connected to: {identity.strip()}")
+            self.write('*RST') # Start fresh
+            time.sleep(1.00)
+            self.write('*RST') # Start fresh
+            time.sleep(1.00)
             return True
         except visa.VisaIOError as e:
             logging.error(f"Failed to connect to {self.resource_name}: {e}")
