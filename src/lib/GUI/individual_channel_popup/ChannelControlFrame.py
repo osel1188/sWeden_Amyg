@@ -172,8 +172,7 @@ class ChannelControlFrame(ttk.Frame):
 
         else:
             # Set default/placeholder values if no initial data provided
-            self.target_voltage_var.set(f"{random.uniform(1.0, min(5.0, self.max_voltage)):.1f}")
-            self.target_voltage_var.set(f"3.0")
+            self.target_voltage_var.set(f"1.0") # self.target_voltage_var.set(f"{random.uniform(1.0, min(5.0, self.max_voltage)):.1f}")
             self.duration_var.set("")
             self.rate_var.set("0.1") # Clear rate if duration is default
             self.ramp_parameter_choice.set("rate")
