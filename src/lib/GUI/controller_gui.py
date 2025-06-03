@@ -2,18 +2,33 @@
 from __future__ import annotations # MUST be the first non-comment line
 
 import os
-import sys
+import sys # sys is already imported
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, font
-from pathlib import Path
+from pathlib import Path # Path is already imported
 import typing
 
-
 # homemade libraries
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+# This line adds the parent directory of the folder containing stimulation_gui.py to sys.path.
+# For example, if stimulation_gui.py is in 'MyProject/lib/GUI/', 'MyProject/lib/' is added to sys.path.
+# It's assumed that 'configurable_csv_logger.py' is located in this 'MyProject/lib/' directory.
+_logger_parent_directory = Path(__file__).resolve().parent.parent
+sys.path.append(str(_logger_parent_directory))
+
+# Attempt to import the ConfigurableCsvLogger
+try:
+    from configurable_csv_logger import ConfigurableCsvLogger
+except ImportError as e:
+    print(f"WARNING: Could not import ConfigurableCsvLogger from '{_logger_parent_directory}'. "
+          f"GUI status messages will not be logged to a file. Error: {e}")
+    ConfigurableCsvLogger = None # Define as None if import fails, for graceful fallback
+
+# Continue with other imports
 from lib.GUI.individual_channel_popup.TargetVoltageSettings_Popup import TargetVoltageSettings_Popup
 if typing.TYPE_CHECKING:
-    sys.path.append(str(Path(__file__).resolve().parent.parent))
+    # The sys.path.append for _logger_parent_directory should also cover this,
+    # assuming 'lib' is a subdirectory of _logger_parent_directory or _logger_parent_directory is 'lib'
+    # sys.path.append(str(Path(__file__).resolve().parent.parent)) # This is _logger_parent_directory
     from lib.stim_controller_with_gui import StimulationController_withGUI
 
 
@@ -51,9 +66,20 @@ class ControllerGUI(tk.Frame):
         self.title_font = self.default_font.copy()
         self.title_font.configure(size=12, weight="bold")
 
+        # Initialize the status logger
+        self.status_logger = None
+        log_output_folder = os.path.join(os.getcwd(), "logs") # Default log folder
+        self.status_logger = ConfigurableCsvLogger(
+            log_folder_path=str(log_output_folder),
+            filename_prefix="gui_status_messages",
+            data_header_columns=['Level', 'Message'] # Timestamp is added automatically by logger
+        )
+        # This message will go to console, not the GUI status text area yet.
+        print(f"INFO: GUI Status Logger initialized. Logging to: {log_output_folder}")
+
         self.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self._create_widgets()
-        self._initial_widget_state()
+        self._initial_widget_state() # This calls update_status, which will now attempt to log
 
         # Handle window closing
         self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -78,25 +104,16 @@ class ControllerGUI(tk.Frame):
         control_frame = ttk.LabelFrame(self, text="2. Control", padding=(10, 5))
         control_frame.pack(fill=tk.X, pady=5)
 
-        # Create the buttons
         self.set_ramp_button = ttk.Button(control_frame, text="Manipulate Individual Voltages", command=self._open_ramp_window)
         self.start_button = ttk.Button(control_frame, text="START Stimulation", command=self.controller.gui_start_stimulation, width=18)
         self.end_button = ttk.Button(control_frame, text="END Stimulation", command=self.controller.gui_end_stimulation, width=18)
         self.beep_button = ttk.Button(control_frame, text="Beep Devices", command=self.controller.gui_beep_devices, width=18)
 
-        #self.start_button.pack(side=tk.LEFT, padx=10, pady=5, expand=True)
-        #self.end_button.pack(side=tk.LEFT, padx=10, pady=5, expand=True)
-        #self.beep_button.pack(side=tk.LEFT, padx=10, pady=5, expand=True)
-
-        # Arrange buttons in a 2x2 grid
-        # Use sticky='nsew' to make buttons fill their cells
-        # Add padding (padx, pady) for spacing between buttons
         self.set_ramp_button.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
         self.start_button.grid(row=0, column=1, padx=5, pady=5, sticky="nsew")
         self.end_button.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
         self.beep_button.grid(row=1, column=1, padx=5, pady=5, sticky="nsew")
 
-        # Configure grid columns and rows within control_frame to expand equally
         control_frame.columnconfigure(0, weight=1)
         control_frame.columnconfigure(1, weight=1)
         control_frame.rowconfigure(0, weight=1)
@@ -110,14 +127,12 @@ class ControllerGUI(tk.Frame):
         self.status_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.status_text.configure(state='disabled') # Read-only
 
-        # Configure tags for colored text
         self.status_text.tag_configure("info", foreground=self.COLOR_INFO)
         self.status_text.tag_configure("warning", foreground=self.COLOR_WARNING, font=self.bold_font)
         self.status_text.tag_configure("error", foreground=self.COLOR_ERROR, font=self.bold_font)
         self.status_text.tag_configure("success", foreground=self.COLOR_SUCCESS, font=self.bold_font)
         self.status_text.tag_configure("ramp", foreground=self.COLOR_RAMP)
         self.status_text.tag_configure("emergency", foreground=self.COLOR_EMERGENCY, font=self.bold_font, background="yellow")
-
 
         # --- Quit Button ---
         quit_button = ttk.Button(self, text="Quit Application", command=self.on_closing)
@@ -129,13 +144,14 @@ class ControllerGUI(tk.Frame):
             try:
                 style.configure("Accent.TButton", font=self.bold_font, foreground="white", background="#0078D4")
             except tk.TclError:
-                self.update_status("Could not apply custom theme.", "warning")
+                # update_status call might be too early if logger/status_text not fully ready
+                # print("Could not apply custom theme.")
+                self.master.after(10, lambda: self.update_status("Could not apply custom theme.", "warning"))
 
 
     def _initial_widget_state(self):
         """Sets the initial enabled/disabled state of widgets."""
         self.confirm_condition_button.config(state=tk.NORMAL)
-        # Disable all buttons in the voltage frame initially
         self.set_widget_state("set_ramp_button", tk.DISABLED)
         self.start_button.config(state=tk.DISABLED)
         self.end_button.config(state=tk.DISABLED)
@@ -144,38 +160,62 @@ class ControllerGUI(tk.Frame):
 
     def _open_ramp_window(self):
         """Opens the popup window for setting the voltage ramp."""
-        # This now blocks until the popup is closed via "Finish" or 'X'
         ts_popup = TargetVoltageSettings_Popup(self, self.controller)
         self.wait_variable(ts_popup.finish_triggered)
 
         self.controller.set_voltages(ts_popup.get_target_voltages())
-        # the popup window is destroyed.
         ts_popup.destroy()
         self.update_status("Voltage/Ramp settings window closed.", "info")
         self.enable_stimulation_controls(self.controller.stimulation_active)
 
-    def update_status(self, message, level="info"):
-        """Appends a message to the status text area with appropriate color."""
+    def update_status(self, message: str, level: str = "info"):
+        """
+        Appends a message to the status text area with appropriate color and logs it.
+        This method is safe to call from other threads as it schedules the GUI update.
+        """
         if not hasattr(self, 'status_text') or not self.status_text.winfo_exists():
-            print(f"Status Update Ignored (GUI not ready): {message}")
+            # GUI not fully initialized, log to console only
+            print(f"Status Update (GUI not ready): [{level.upper()}] {message}")
+            # Optionally, try to log to file here too if self.status_logger is ready
+            if self.status_logger:
+                try:
+                    self.status_logger.log_entry(level, f"(GUI not ready) {message}")
+                except Exception as log_ex:
+                    print(f"Console Log: Error during early status logging: {log_ex}")
             return
+        # Schedule the GUI update and logging to occur in the main Tkinter thread
         self.master.after(0, self._append_status_message, message, level)
 
-    def _append_status_message(self, message, level):
-        """Internal method to append message"""
+    def _append_status_message(self, message: str, level: str):
+        """
+        Internal method to append message to GUI's ScrolledText and log to CSV.
+        This method MUST be called from the main Tkinter thread (e.g., via master.after).
+        """
         try:
-            tag = level.lower()
-            if tag not in ["info", "warning", "error", "success", "ramp", "emergency"]:
-                tag = "info"
+            # Part 1: Update GUI's ScrolledText
+            gui_tag = level.lower()
+            if gui_tag not in ["info", "warning", "error", "success", "ramp", "emergency"]:
+                gui_tag = "info"  # Default GUI tag
+            
             self.status_text.configure(state='normal')
-            self.status_text.insert(tk.END, f"{message}\n", tag)
+            self.status_text.insert(tk.END, f"{message}\n", gui_tag)
             self.status_text.configure(state='disabled')
-            self.status_text.see(tk.END)
-            self.master.update_idletasks()
-        except tk.TclError as e:
-            print(f"Error updating GUI status: {e}")
-        except Exception as e:
-            print(f"Unexpected error updating GUI status: {e}")
+            self.status_text.see(tk.END) # Scroll to the end
+            # self.master.update_idletasks() # Usually not needed when master.after is used
+
+            # Part 2: Log the message using ConfigurableCsvLogger
+            if self.status_logger:
+                try:
+                    # 'level' is like "info", "warning"; 'message' is the string.
+                    self.status_logger.log_entry(level, message)
+                except Exception as log_ex:
+                    # Avoid crashing the GUI if logging itself fails. Print to console.
+                    print(f"ERROR: Failed to write to status log file: {log_ex}")
+            
+        except tk.TclError as e_gui: # Error related to Tkinter operations
+            print(f"ERROR: TclError while updating GUI status text: {e_gui}")
+        except Exception as e_unexpected: # Other unexpected errors
+            print(f"ERROR: Unexpected error in _append_status_message: {e_unexpected}")
 
     def set_widget_state(self, widget_name, state):
         """Sets the state (tk.NORMAL or tk.DISABLED) of a specific widget."""
@@ -187,9 +227,9 @@ class ControllerGUI(tk.Frame):
         elif widget_name == "voltage_entries": pass
         elif widget and isinstance(widget, list): pass
         else:
-            # Avoid logging warning if status_text not ready during init
             if hasattr(self, 'status_text') and self.status_text.winfo_exists():
-                self.update_status(f"Warning: Could not find widget '{widget_name}' to set state.", "warning")
+                # Log this type of internal warning too
+                self.update_status(f"Internal Warning: Could not find widget '{widget_name}' to set state.", "warning")
 
     def enable_condition_selection(self):
         self.set_widget_state("confirm_condition_button", tk.NORMAL)
@@ -198,26 +238,20 @@ class ControllerGUI(tk.Frame):
         self.set_widget_state("confirm_condition_button", tk.DISABLED)
 
     def enable_voltage_input(self):
-        """Enables all buttons in the voltage manipulation frame."""
         self.set_widget_state("set_ramp_button", tk.NORMAL)
 
     def disable_voltage_input(self):
-        """Disables all buttons in the voltage manipulation frame."""
         self.set_widget_state("set_ramp_button", tk.DISABLED)
 
     def enable_stimulation_controls(self, is_active):
-        """Enables/disables main controls based on stimulation state and enables voltage input."""
         self.set_widget_state("start_button", tk.DISABLED if is_active else tk.NORMAL)
-        #self.set_widget_state("end_button", tk.NORMAL if is_active else tk.DISABLED)
-        self.set_widget_state("end_button", tk.NORMAL)
+        self.set_widget_state("end_button", tk.NORMAL) # Original logic: end_button always normal if controls enabled
         self.set_widget_state("beep_button", tk.NORMAL)
-        # Enable voltage manipulation controls whenever stimulation controls are enabled
         self.enable_voltage_input()
 
     def disable_all_controls(self):
-        """Disables all user controls."""
         self.disable_condition_selection()
-        self.disable_voltage_input() # This now handles all 4 buttons
+        self.disable_voltage_input()
         self.set_widget_state("start_button", tk.DISABLED)
         self.set_widget_state("end_button", tk.DISABLED)
         self.set_widget_state("beep_button", tk.DISABLED)
@@ -231,101 +265,63 @@ class ControllerGUI(tk.Frame):
     def on_closing(self):
         """Handles the window close event."""
         if messagebox.askokcancel("Quit", "Do you want to quit the application?\nStimulation (if active) will be stopped."):
+            self.update_status("Application quit requested by user.", "info")
             self.controller.gui_quit()
+            # No explicit logger close needed as ConfigurableCsvLogger opens/closes file per write
+            # If ConfigurableCsvLogger were to hold resources, self.status_logger.close() would go here.
+            self.master.destroy()
 
-# --- Example Usage (Mock Controller - Updated Slightly) ---
-# (Keep the __main__ block as it was for testing)
 if __name__ == '__main__':
-    class MockStimController:
-        def __init__(self):
-            self.config = {
-                'channels': {'total': 4}, # Make sure this matches popup needs
-                'safety': {'max_voltage_amplitude': 8.0}
-            }
-            self.is_connected = False
-            self.stimulation_active = False # Renamed for clarity to match enable_stimulation_controls arg
-            self.gui = None
-            self.master = None
-            self.target_voltages = {} # To store voltages from popup
+    # Example of how to run this GUI (requires a mock controller)
+    # This part is for demonstration and testing the GUI standalone
 
-        def set_gui(self, gui):
-            self.gui = gui
+    # Mock for StimulationController_withGUI for testing ControllerGUI
+    class MockStimulationController:
+        def __init__(self):
+            self.stimulation_active = False
+            self.gui = None # Will be set by ControllerGUI
 
         def gui_confirm_condition(self):
             condition = self.gui.condition_var.get()
-            self.gui.update_status(f"Attempting connection with condition: {condition}...", "info")
-            if self.master:
-                self.master.after(1000, self._finish_connection, True, condition)
-
-        def _finish_connection(self, success, condition):
-             if success:
-                self.is_connected = True
-                self.gui.update_status(f"Connected with condition: {condition}.", "success")
-                self.gui.disable_condition_selection()
-                # self.gui.enable_voltage_input() # enable_stimulation_controls now calls this
-                self.gui.enable_stimulation_controls(self.stimulation_active) # Enable controls after connection
-                # Beep button state handled by enable_stimulation_controls
-             else:
-                 self.gui.update_status("Connection failed.", "error")
-                 self.gui.enable_condition_selection()
-
-        # This method is called by the GUI AFTER the popup closes
-        def set_voltages(self, target_voltages: dict):
-            self.target_voltages = target_voltages
-            self.gui.update_status(f"Target voltages received from popup: {self.target_voltages}", "info")
-            # Here you would typically send commands based on these voltages
-            # For now, just log them
-
-        def gui_start_target_voltage(self, channel_index, target_voltage, duration=None, rate=None):
-            # This method is primarily called *from within* the TargetVoltageSettings_Popup
-            # It's less relevant after the popup closes and `set_voltages` is used,
-            # but keep it for the popup's functionality.
-            if not self.is_connected:
-                self.gui.update_status(f"Cannot set voltage for Ch {channel_index+1}: Not connected.", "error")
-                return
-            param_str = f"duration {duration}s" if duration else f"rate {rate} V/s"
-            self.gui.update_status(f"POPUP CMD: Set Ch {channel_index+1} ramp to {target_voltage}V ({param_str}).", "ramp")
-
-        def _ramp_finished(self, channel_index, final_voltage):
-             # Optional: Can be called by actual ramp logic when done
-             self.gui.update_status(f"Ramp complete for channel {channel_index+1}. Reached {final_voltage}V.", "success")
+            self.gui.update_status(f"Condition '{condition}' confirmed & devices (mock) connected.", "success")
+            self.gui.disable_condition_selection()
+            self.gui.enable_stimulation_controls(self.stimulation_active)
 
         def gui_start_stimulation(self):
-            if not self.is_connected:
-                self.gui.update_status("Cannot start stimulation: Not connected.", "error")
-                return
-            # Check if voltages have been set via the popup
-            if not self.target_voltages:
-                 self.gui.update_status("Cannot start stimulation: Voltages not set. Use 'Manipulate Voltages...'", "warning")
-                 return
-            self.gui.update_status("Starting stimulation...", "info")
-            self.gui.update_status(f"Stimulating with target voltages: {self.target_voltages}", "info")
             self.stimulation_active = True
+            self.gui.update_status("Stimulation STARTED.", "success")
             self.gui.enable_stimulation_controls(self.stimulation_active)
 
         def gui_end_stimulation(self):
-            self.gui.update_status("Ending stimulation...", "info")
             self.stimulation_active = False
+            self.gui.update_status("Stimulation ENDED.", "info")
             self.gui.enable_stimulation_controls(self.stimulation_active)
+            # Typically, you might want to disable voltage input again after ending
+            # self.gui.disable_voltage_input()
+
 
         def gui_beep_devices(self):
-             if not self.is_connected:
-                 self.gui.update_status("Cannot beep: Not connected.", "error")
-                 return
-             self.gui.update_status("Beeping devices...", "info")
+            self.gui.update_status("Beep command sent to devices (mock).", "info")
+
+        def set_voltages(self, voltages):
+            self.gui.update_status(f"Target voltages set: {voltages} (mock).", "ramp")
+            # Here, one might re-enable start if it was disabled pending voltage settings
+            if not self.stimulation_active:
+                 self.gui.set_widget_state("start_button", tk.NORMAL)
+
 
         def gui_quit(self):
-            self.gui.update_status("Quitting...", "info")
-            if self.stimulation_active: self.gui_end_stimulation()
-            if self.is_connected:
-                self.gui.update_status("Disconnecting...", "info")
-                self.is_connected = False
-            self.gui.update_status("Application closing.", "info")
-            if self.master: self.master.after(500, self.master.destroy)
+            if self.stimulation_active:
+                self.gui_end_stimulation() # Ensure stimulation is stopped
+            self.gui.update_status("Controller shutting down (mock).", "info")
+            print("MockStimulationController: Quit action performed.")
+            # Actual application exit is handled by GUI's on_closing destroying master
 
     root = tk.Tk()
-    mock_controller = MockStimController()
-    mock_controller.master = root
+    mock_controller = MockStimulationController()
     app = ControllerGUI(master=root, controller=mock_controller)
-    mock_controller.set_gui(app)
+    mock_controller.gui = app # Link back the GUI to the mock controller
+    
+    # Set a minimum size for the window
+    root.minsize(450, 550)
     root.mainloop()
