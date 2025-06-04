@@ -27,7 +27,8 @@
       "burst_num_cycles": "INFinity",
       "burst_state": true,
       "burst_mode": "TRIGgered",
-      "burst_phase": 0
+      "burst_phase": 0,
+	  "amplitude": 0.002
     },
     "ramp": {
       "duration_seconds": 60,

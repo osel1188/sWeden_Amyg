@@ -203,46 +203,29 @@ class KeysightEDU:
     def setup_defaults(self, defaults_config):
         """Applies default settings from the configuration."""
         log.info(f"Setting up defaults for {self.resource_name} (Name: '{self.name}')...")
-        
-        # It's good practice to ensure outputs are off before changing many settings.
-        for i in self.config.get('output_channels', [1, 2]):
-            self.set_output_state(i, False)
-            time.sleep(0.05) # Small delay
-
         load = defaults_config.get('load_impedance', 'INFinity')
-        func = defaults_config.get('function', 'SIN') # Default to SIN if not specified
-        # Default waveform parameters (can be overridden by specific function defaults)
-        freq = defaults_config.get('frequency', 1000) # Default 1kHz
-        ampl = defaults_config.get('amplitude', 1.0)  # Default 1Vpp or Vrms depending on func
-        offs = defaults_config.get('offset', 0)      # Default 0V DC offset
-
+        func = defaults_config.get('function', 'SIN')
+        burst_cycles = defaults_config.get('burst_num_cycles', 'INFinity')
+        burst_state = defaults_config.get('burst_state', True)
+        burst_mode = defaults_config.get('burst_mode', 'TRIGgered')
+        burst_phase = defaults_config.get('burst_phase', 0)
+        
+        #self.write('*RST') # Start fresh
         for i in self.config.get('source_channels', [1, 2]):
             out_num = i # Assuming output number matches source number for these commands
+            # Ensure output is off before changing settings
+            self.set_output_state(out_num, False)
+            time.sleep(0.05)
             
             self.write(f':OUTPut{out_num}:LOAD {load}')
-            
-            # Apply basic waveform first if specified, otherwise set function and then params
-            # Some devices prefer APPLY, others separate commands.
-            # For Keysight EDU, separate commands are generally robust.
             self.write(f':SOURce{i}:FUNCtion {func}')
-            self.write(f':SOURce{i}:FREQuency {freq}')
-            self.write(f':SOURce{i}:VOLTage {ampl:.4f}') # Assuming amplitude is Vpp for general case
-            self.write(f':SOURce{i}:VOLTage:OFFSet {offs:.4f}')
-
-            if 'burst_settings' in defaults_config:
-                burst_conf = defaults_config['burst_settings']
-                burst_cycles = burst_conf.get('num_cycles', 'INFinity')
-                burst_state = burst_conf.get('state', True) 
-                burst_mode = burst_conf.get('mode', 'TRIGgered') # TRIG, GAT, INF
-                burst_phase = burst_conf.get('phase', 0)
-                
-                self.write(f':SOURce{i}:BURSt:NCYCles {burst_cycles}')
-                self.write(f':SOURce{i}:BURSt:MODE {burst_mode}')
-                self.write(f':SOURce{i}:BURSt:PHASe {burst_phase}')
-                self.write(f':SOURce{i}:BURSt:STATe {1 if burst_state else 0}')
-            
+            self.write(f':SOURce{i}:BURSt:NCYCles {burst_cycles}')
+            self.write(f':SOURce{i}:BURSt:STATe {1 if burst_state else 0}')
+            self.write(f':SOURce{i}:BURSt:MODE {burst_mode}')
+            self.write(f':SOURce{i}:BURSt:PHASe {burst_phase}')
             log.debug(f"Device {self.resource_name} (Name: '{self.name}'): Source {i} defaults applied.")
-
+            # self.write(':SOURce%d:VOLTage:COUPle:STATe %d' % (i, 1)) # Is coupling needed? Check device manual
+    
     def configure_trigger(self, source_num, trigger_source='BUS', delay=0):
         """Configures the trigger source and optional delay for a specific source channel."""
         # Trigger sources: IMMediate, EXTernal, BUS, TIMer

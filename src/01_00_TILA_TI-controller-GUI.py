@@ -2,9 +2,16 @@
 import sys
 import logging
 import tkinter as tk
+import tkinter.ttk as ttk
+import pyvisa
+import numpy
+import keyboard
 # Import the GUI controller instead of the base one
 from lib.stim_controller_with_gui import StimulationController_withGUI
 from lib.participant_assigner import ParticipantAssigner
+
+
+import tkinter
 
 # Configure logging for the main script execution (optional for GUI)
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -14,6 +21,7 @@ from lib.participant_assigner import ParticipantAssigner
 if __name__ == "__main__":
     print("Starting Stimulation Control Application (GUI Mode)")
 
+    # --- I. Set up the participant information and conditions --- #
     # Holder for data received by the callback, if needed after mainloop
     processed_data_holder = [] 
     def my_data_handler_callback(row_data_series):
@@ -27,65 +35,34 @@ if __name__ == "__main__":
             print("No data was successfully processed in this operation, or an error occurred.")
         print("--- Callback: End of Data ---")
 
-    root = tk.Tk()
-    # The ParticipantAssigner will now handle closing 'root' after one operation.
-    app = ParticipantAssigner(root, on_data_processed_callback=my_data_handler_callback)
-
-    print("Starting Tkinter mainloop...")
-    print("The GUI will perform one operation (assign/load) and then close itself.")
-    
     try:
+        root = tk.Tk()
+        # The ParticipantAssigner will now handle closing 'root' after one operation.
+        app = ParticipantAssigner(root, on_data_processed_callback=my_data_handler_callback)
+        print("Starting Tkinter mainloop...")
+        print("The GUI will perform one operation (assign/load) and then close itself.")
         root.mainloop() # This will run until root.destroy() is called from within the app
     except tk.TclError as e:
         print(f"Tkinter mainloop exited, possibly due to window destruction: ({e})") # Expected
-    
-    print("\nTkinter mainloop has finished (GUI was closed by the app instance).")
-
     if processed_data_holder:
         print("\nData captured by callback during the GUI operation:")
         # For simplicity, printing the first (and likely only) item
         print(processed_data_holder[0].to_string()) 
 
-    # Check for Tkinter availability early
-    try:
-        import tkinter
-        import tkinter.ttk
-    except ImportError:
-        print("\n--- FATAL ERROR ---")
-        print("Tkinter library not found.")
-        print("Please ensure Python's Tkinter module is installed on your system.")
-        print("(On Debian/Ubuntu: sudo apt-get install python3-tk)")
-        print("(On Fedora: sudo dnf install python3-tkinter)")
-        print("(On Windows/macOS: Usually included with Python, check installation)")
-        print("--------------------\n")
-        sys.exit(1)
-
-    # Optional: Check other libraries (already in base controller's check)
-    try:
-        import pyvisa
-        import numpy
-        import keyboard
-    except ImportError as e:
-         print(f"Error: Missing required library: {e}. Please install requirements.")
-         print("Try: pip install pyvisa numpy keyboard pyvisa-py")
-         sys.exit(1)
-
-    config_file = 'config.json'
-    
+    # --- II. Set up the service controlling the Keysight instruments --- #6
     try:
         # Instantiate the GUI controller
-        controller = StimulationController_withGUI(config_path=config_file, is_mock_up=False)
-        # The run method now starts the Tkinter main loop
+        config_file = 'cfg/keysight_config.json'
+        controller = StimulationController_withGUI(config_path=config_file, is_mock_up=True)
         controller.run()
-
     except ValueError as e:
         print(f"\nConfiguration or Initialization Error: {e}")
         print("Please check your 'config.json' file and device connections.")
         # Show error in a simple Tkinter window if possible
         try:
-            root = tkinter.Tk()
+            root = tk.Tk()
             root.withdraw() # Hide main window
-            tkinter.messagebox.showerror("Initialization Error", f"Configuration or Initialization Error:\n\n{e}\n\nPlease check config.json and connections.")
+            tk.messagebox.showerror("Initialization Error", f"Configuration or Initialization Error:\n\n{e}\n\nPlease check config.json and connections.")
             root.destroy()
         except Exception:
             pass # Fallback to console print if messagebox fails
@@ -96,13 +73,14 @@ if __name__ == "__main__":
         # logger.exception(f"An unexpected critical error occurred: {e}")
         # Show error in a simple Tkinter window if possible
         try:
-            root = tkinter.Tk()
+            root = tk.Tk()
             root.withdraw() # Hide main window
-            tkinter.messagebox.showerror("Critical Error", f"A critical error occurred:\n\n{e}")
+            tk.messagebox.showerror("Critical Error", f"A critical error occurred:\n\n{e}")
             root.destroy()
         except Exception:
              pass # Fallback
         # Note: Cleanup might not run reliably here if controller init failed badly
         sys.exit(1)
-    finally:
-        print("Stimulation Control Application finished.")
+    
+
+    print("Stimulation Control Application finished.")
