@@ -166,16 +166,16 @@ class StimulationController:
              return False
 
         try:
+            # Apply default settings (burst, load, etc.)
+            master.setup_defaults(defaults)
+            slave.setup_defaults(defaults)
+            time.sleep(0.5)
+
             # Apply specific frequencies for the condition (Voltage set to 0 initially)
             master.apply_sinusoid(1, params['master_freqs'][0], 0)
             master.apply_sinusoid(2, params['master_freqs'][1], 0)
             slave.apply_sinusoid(1, params['slave_freqs'][0], 0)
             slave.apply_sinusoid(2, params['slave_freqs'][1], 0)
-            time.sleep(0.5)
-
-            # Apply default settings (burst, load, etc.)
-            master.setup_defaults(defaults)
-            slave.setup_defaults(defaults)
             time.sleep(0.5)
 
             # Configure triggering (Master BUS triggers, Slave External)

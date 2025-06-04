@@ -12,7 +12,7 @@ class ParticipantAssigner:
         master.title("Participant Assigner")
         master.geometry("480x240") # Increased height for the new dropdown
 
-        self.excel_file_path = os.path.join(os.getcwd(), "metadata", "Excel_for_stimulators.xlsx")
+        self.excel_file_path = os.path.join(os.getcwd(), "cfg", "Excel_for_stimulators.xlsx")
         self.default_save_dir = Path.home() / "Documents" / "TILA_DATA"
 
         self.on_data_processed_callback = on_data_processed_callback
@@ -212,7 +212,7 @@ class ParticipantAssigner:
 
         try:
             now = datetime.datetime.now()
-            timestamp = now.strftime("%Y%m%d_%H%M%S")
+            timestamp = now.strftime("%Y%m%d")
             safe_participant_id = "".join(c if c.isalnum() or c in ('_','-') else '_' for c in participant_id)
             output_folder_name = f"{timestamp}_{safe_participant_id}"
             output_subfolder_path = os.path.join(base_save_folder, output_folder_name)
@@ -273,9 +273,9 @@ class ParticipantAssigner:
 
 
 def create_dummy_excel_if_not_exists(excel_file_path_param="Excel_for_stimulators.xlsx"): # Renamed param to avoid conflict
-    metadata_dir = Path("metadata")
-    metadata_dir.mkdir(exist_ok=True) # Ensure metadata directory exists
-    full_excel_path = metadata_dir / excel_file_path_param
+    cfg_dir = Path("cfg")
+    cfg_dir.mkdir(exist_ok=True) # Ensure cfg directory exists
+    full_excel_path = cfg_dir / excel_file_path_param
 
     if not full_excel_path.exists():
         print(f"Creating dummy Excel: {full_excel_path} for testing purposes.")
@@ -317,9 +317,9 @@ def create_dummy_excel_if_not_exists(excel_file_path_param="Excel_for_stimulator
 
 
 if __name__ == "__main__":
-    # Create dummy excel in the 'metadata' subdirectory relative to the script's location
+    # Create dummy excel in the 'cfg' subdirectory relative to the script's location
     excel_filename = "Excel_for_stimulators.xlsx"
-    create_dummy_excel_if_not_exists(excel_filename) # Will create in ./metadata/
+    create_dummy_excel_if_not_exists(excel_filename) # Will create in ./cfg/
 
     processed_data_holder = []
 
