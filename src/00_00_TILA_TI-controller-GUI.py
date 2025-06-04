@@ -36,7 +36,6 @@ if __name__ == "__main__":
          print("Try: pip install pyvisa numpy keyboard pyvisa-py")
          sys.exit(1)
 
-
     config_file = 'config.json'
 
     try:
