@@ -7,7 +7,7 @@ import pyvisa
 import numpy
 import keyboard
 # Import the GUI controller instead of the base one
-from lib.stim_controller_with_gui import StimulationController_withGUI
+from lib.UI_device_control.stim_controller_with_gui import StimulationController_withGUI
 from lib.participant_assigner import ParticipantAssigner
 
 
@@ -53,7 +53,7 @@ if __name__ == "__main__":
     try:
         # Instantiate the GUI controller
         config_file = 'cfg/keysight_config.json'
-        controller = StimulationController_withGUI(config_path=config_file, is_mock_up=True)
+        controller = StimulationController_withGUI(config_path=config_file, condition=processed_data_holder[0]['condition'], is_mock_up=False)
         controller.run()
     except ValueError as e:
         print(f"\nConfiguration or Initialization Error: {e}")

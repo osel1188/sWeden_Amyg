@@ -2,7 +2,7 @@
 import sys
 import logging
 
-from lib.stim_controller import StimulationController
+from lib.UI_device_control.stim_controller import StimulationController
 
 # Configure logging for the main script execution
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

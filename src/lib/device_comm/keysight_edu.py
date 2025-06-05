@@ -2,7 +2,13 @@ import pyvisa as visa
 import time
 import logging
 import os
-# Assuming configurable_csv_logger.py is in the same directory or accessible in PYTHONPATH
+
+
+import os
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 from configurable_csv_logger import ConfigurableCsvLogger 
 
 # Configure standard logging for the KeysightEDU class's own operational messages
@@ -66,6 +72,8 @@ class KeysightEDU:
             self.clear() 
             identity = self.query("*IDN?") 
             log.info(f"Connected to (Name: '{self.name}'): {identity.strip() if identity else 'N/A'}")
+            self.write('*RST') 
+            time.sleep(self.config.get('rst_delay', 1.0)) # Use config or default
             self.write('*RST') 
             time.sleep(self.config.get('rst_delay', 1.0)) # Use config or default
             return True
@@ -195,10 +203,9 @@ class KeysightEDU:
             log.error(f"Unexpected error getting voltage for Source {source_num} on {self.resource_name} (Name: '{self.name}'): {e}")
             return 0.0
 
-    def apply_sinusoid(self, source_num, frequency, voltage, offset=0, phase=0):
-        """Configures the source to output a sinusoid with optional offset and phase."""
-        # Format: :SOURce<n>:APPLy:SINusoid [<frequency>[, <amplitude>[, <offset>[, <phase>]]]]
-        self.write(f':SOURce{source_num}:APPLy:SINusoid {frequency},{voltage:.4f},{offset:.4f},{phase}')
+    def apply_sinusoid(self, source_num, frequency, voltage):
+        """Configures the source to output a sinusoid."""
+        self.write(f':SOURce{source_num}:APPLy:SINusoid {frequency},{voltage:.4f}')
 
     def setup_defaults(self, defaults_config):
         """Applies default settings from the configuration."""
@@ -226,35 +233,16 @@ class KeysightEDU:
             log.debug(f"Device {self.resource_name} (Name: '{self.name}'): Source {i} defaults applied.")
             # self.write(':SOURce%d:VOLTage:COUPle:STATe %d' % (i, 1)) # Is coupling needed? Check device manual
     
-    def configure_trigger(self, source_num, trigger_source='BUS', delay=0):
-        """Configures the trigger source and optional delay for a specific source channel."""
-        # Trigger sources: IMMediate, EXTernal, BUS, TIMer
+    def configure_trigger(self, source_num, trigger_source):
+        """Configures the trigger source (e.g., 'BUS', 'EXTernal')."""
         self.write(f':TRIGger{source_num}:SOURce {trigger_source}')
-        if trigger_source.upper() == 'TIMER':
-            # If timer, you might need to set :TRIGger<n>:TIMer <time>
-            log.warning(f"Trigger source for CH{source_num} set to TIMER. Ensure :TRIGger{source_num}:TIMer is set if needed.")
-        self.write(f':TRIGger{source_num}:DELay {delay}') # Delay in seconds
-        log.debug(f"Device {self.resource_name} (Name: '{self.name}'): Source {source_num} trigger set to {trigger_source} with delay {delay}s")
+        log.debug(f"Device {self.resource_name} (Name: '{self.name}'): Source {source_num} trigger set to {trigger_source}")
 
-    def configure_output_trigger(self, output_num=1, state=False, source='CH1'):
-        """ 
-        Enables or disables the output trigger signal (TRIG OUT).
-        Typically, only one output trigger exists, often associated with Output 1 or a master trigger.
-        Args:
-            output_num (int): Usually 1 for the main trigger output. Check device manual.
-            state (bool): True to enable output trigger, False to disable.
-            source (str): Source for the trigger output signal (e.g., 'CH1', 'CH2', 'MANual').
-                          'MANual' might mean it triggers when *TRG is sent.
-        """
-        # The command might vary slightly; common is :OUTPut:TRIGger[:STATe] and :OUTPut:TRIGger:SOURce
-        # For EDU3321xA series, it's often :OUTPut:TRIGger:SOURce CH1|CH2|MANual
-        # And :OUTPut:TRIGger[:STATe] ON|OFF (or :OUTPut:TRIGger ON|OFF for some)
-        # We'll assume output_num is for devices with multiple distinct trigger outputs,
-        # but for EDU series, it's usually one main trigger out.
-        
-        self.write(f':OUTPut:TRIGger:SOURce {source}') # Sets what event generates the trigger out pulse
-        self.write(f':OUTPut:TRIGger {1 if state else 0}') # Enables/disables the Trig Out connector
-        log.debug(f"Device {self.resource_name} (Name: '{self.name}'): Output Trigger (connector) state set to {state}, source {source}")
+
+    def configure_output_trigger(self, output_num, state):
+        """ Enables or disables the output trigger state (Master only typically)."""
+        self.write(f':OUTPut{output_num}:TRIGger:STATe {1 if state else 0}')
+        log.debug(f"Device {self.resource_name} (Name: '{self.name}'): Output Trigger (connector) state set to {state}")  
 
 
     def trigger(self):

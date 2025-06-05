@@ -17,10 +17,10 @@ if typing.TYPE_CHECKING:
     # sys.path.append(str(Path(__file__).resolve().parent.parent))
     try:
         sys.path.append(str(Path(__file__).resolve().parent))
-        sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+        sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
         from TargetVoltageSettings_Popup import TargetVoltageSettings_Popup
-        from lib.GUI.controller_gui import ControllerGUI
-        from lib.stim_controller_with_gui import StimulationController_withGUI
+        from lib.UI_device_control.GUI.stim_controller_gui import ControllerGUI
+        from lib.UI_device_control.stim_controller_with_gui import StimulationController_withGUI
     except ImportError:
         # Define dummy types if imports fail during static analysis
         TargetVoltageSettings_Popup = typing.TypeVar('TargetVoltageSettings_Popup')

@@ -2,7 +2,7 @@
 import sys
 import logging
 # Import the GUI controller instead of the base one
-from lib.stim_controller_with_gui import StimulationController_withGUI
+from lib.UI_device_control.stim_controller_with_gui import StimulationController_withGUI
 
 # Configure logging for the main script execution (optional for GUI)
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
