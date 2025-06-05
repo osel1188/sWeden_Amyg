@@ -5,3 +5,4 @@ testerss.py
 /metadata
 *.xlsx
 *.xlsx
+cfg/participant_conditions_path.txt
