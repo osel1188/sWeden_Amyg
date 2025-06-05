@@ -249,7 +249,7 @@ class ParticipantAssigner:
 
         try:
             now = datetime.datetime.now()
-            timestamp = now.strftime("%Y%m%d")
+            timestamp = now.strftime("%Y-%m-%d")
             safe_participant_id = "".join(c if c.isalnum() or c in ('_','-') else '_' for c in participant_id)
             output_folder_name = f"{timestamp}_{safe_participant_id}"
             output_subfolder_path = os.path.join(base_save_folder, output_folder_name)
