@@ -240,6 +240,7 @@ class ParticipantAssigner:
             if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
 
+        randomization_number = assigned_row_data["randomization_number"]
         fc_version = assigned_row_data["FC_version"]
         ta_version = assigned_row_data["TA_version"]
         em_version = assigned_row_data["EM_version"]
@@ -260,6 +261,7 @@ class ParticipantAssigner:
             with open(filepath, "w") as f:
                 f.write(f"Participant ID: {participant_id}\n")
                 f.write(f"Selected Sex: {selected_sex}\n") # Added selected sex to output
+                f.write(f'Randomization Number: {randomization_number}\n')
                 f.write(f"Assigned Row Index (in Excel, 0-based): {assigned_row_index}\n")
                 f.write(f"FC_version: {fc_version}\n")
                 f.write(f"TA_version: {ta_version}\n")
