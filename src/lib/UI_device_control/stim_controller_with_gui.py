@@ -23,21 +23,26 @@ class StimulationController_withGUI(StimulationController):
     StimulationController adapted for a Tkinter GUI.
     Inherits core logic from StimulationController.
     """
-    def __init__(self, config_path='config.json', condition: str = None, enable_keyboard_shortcut: bool = False, is_mock_up: bool = False):
-        super().__init__(config_path=config_path, is_mock_up=is_mock_up)
+    def __init__(self, config_path='config.json', 
+                 condition: str = None, 
+                 participant_folder: str = None,
+                 enable_keyboard_shortcut: bool = False, is_mock_up: bool = False):
+        super().__init__(config_path=config_path, 
+                         participant_folder=participant_folder,
+                         is_mock_up=is_mock_up)
         self.root = None
         self.gui = None
         # Override the status update mechanism to use the GUI
         self._status_update_func = self._print_status_fallback # Default if GUI not ready
-        self._enable_keyboard_shortcut = enable_keyboard_shortcut
-        self._condition = condition
-        
+        self._enable_keyboard_shortcut = enable_keyboard_shortcut        
         # a condition was initially given, adjust to the GUI expected values
         if condition:
             if condition == "sham":
                 self._condition = "SHAM"
             elif condition == "active":
                 self._condition = "STIM"
+        else:
+            self._condition = None
 
     def run(self):
         """Starts the GUI application."""
@@ -56,8 +61,8 @@ class StimulationController_withGUI(StimulationController):
         except tk.TclError:
              print("Warning: Could not set preferred ttk theme.")
 
-
-        self.gui = ControllerGUI(self.root, self)
+        self.gui = ControllerGUI(self.root, self, 
+                                 log_folder_path=self._participant_folder)
         self._status_update_func = self.gui.update_status # Link to GUI's update method
 
         # Start keyboard listener AFTER GUI is created

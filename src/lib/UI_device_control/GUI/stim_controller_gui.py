@@ -44,7 +44,7 @@ class ControllerGUI(tk.Frame):
     COLOR_RAMP = "blue"
     COLOR_EMERGENCY = "#FF0000" # Bright Red
 
-    def __init__(self, master: tk.Tk, controller: StimulationController_withGUI):
+    def __init__(self, master: tk.Tk, controller: StimulationController_withGUI, log_folder_path=None):
         """
         Initializes the GUI Frame.
 
@@ -76,14 +76,18 @@ class ControllerGUI(tk.Frame):
 
         # Initialize the status logger
         self.status_logger = None
-        log_output_folder = os.path.join(os.getcwd(), "logs") # Default log folder
+        
+        if log_folder_path is None:
+            self.log_folder_path = os.path.join(os.getcwd(), "logs") # Default log folder
+        else:
+            self.log_folder_path = log_folder_path
         self.status_logger = ConfigurableCsvLogger(
-            log_folder_path=str(log_output_folder),
+            log_folder_path=str(self.log_folder_path),
             filename_prefix="gui_status_messages",
             data_header_columns=['Level', 'Message'] # Timestamp is added automatically by logger
         )
         # This message will go to console, not the GUI status text area yet.
-        print(f"INFO: GUI Status Logger initialized. Logging to: {log_output_folder}")
+        print(f"INFO: GUI Status Logger initialized. Logging to: {self.log_folder_path}")
 
         self.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self._create_widgets()

@@ -7,13 +7,39 @@ import datetime
 import random
 
 class ParticipantAssigner:
-    def __init__(self, master, on_data_processed_callback=None):
+    def __init__(self, master, config_file, on_data_processed_callback=None):
         self.master = master
         master.title("Participant Assigner")
         master.geometry("480x240") # Increased height for the new dropdown
+        
+        config_paths = {}
+        try:
+            # Read the file and parse key-value pairs into a dictionary
+            with open(config_file, 'r') as f:
+                for line in f:
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        config_paths[key.strip()] = value.strip()
 
-        self.excel_file_path = os.path.join(os.getcwd(), "cfg", "Excel_for_stimulators.xlsx")
-        self.default_save_dir = Path.home() / "Documents" / "TILA_DATA"
+            # --- Assign the excel file path ---
+            if 'condition_file_path' in config_paths:
+                self.excel_file_path = config_paths['condition_file_path']
+            else:
+                raise KeyError(f"Key 'excel_file' not found in {config_file}")
+
+            # --- Assign the default save directory path ---
+            if 'save_dir_base_path' in config_paths:
+                # Convert the string path to a Path object to match the original code
+                self.default_save_dir = Path(config_paths['save_dir_base_path'])
+            else:
+                raise KeyError(f"Key 'save_dir' not found in {config_file}")
+
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Configuration file not found at: {config_file}")
+
+        # self.excel_file_path now holds the path from the text file, e.g., "C:/.../file.xlsx"
+        #self.excel_file_path = os.path.join(os.getcwd(), "cfg", "Excel_for_stimulators.xlsx")
+        #self.default_save_dir = Path.home() / "Documents" / "TILA_DATA"
 
         self.on_data_processed_callback = on_data_processed_callback
         self.last_processed_row_data = None
@@ -76,15 +102,15 @@ class ParticipantAssigner:
         # Initial input validations
         if not participant_id:
             messagebox.showerror("Input Error", "Participant ID cannot be empty.")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
         if not base_save_folder:
             messagebox.showerror("Input Error", "Base save folder path cannot be empty.")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
         if selected_sex == self.sex_options[0]: # "Select Sex"
             messagebox.showerror("Input Error", "Please select the participant's sex.")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
 
         df = None
@@ -92,11 +118,11 @@ class ParticipantAssigner:
             df = pd.read_excel(self.excel_file_path)
         except FileNotFoundError:
             messagebox.showerror("File Error", f"Excel file not found at: {self.excel_file_path}\nPlease ensure the path is correct and the file exists.")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
         except Exception as e:
             messagebox.showerror("Excel Read Error", f"Error reading Excel file: {e}")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
 
         # Added 'sex' to required columns
@@ -104,7 +130,7 @@ class ParticipantAssigner:
         missing_excel_cols = [col for col in required_excel_cols if col not in df.columns]
         if missing_excel_cols:
             messagebox.showerror("Excel Error", f"Missing required columns in Excel: {', '.join(missing_excel_cols)}")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
 
         # Ensure 'sex' column exists and handle potential errors if it contains unexpected data types before .str accessor
@@ -112,7 +138,7 @@ class ParticipantAssigner:
             df['sex'] = df['sex'].astype(str) # Ensure 'sex' is string for comparison
         else: # This case should be caught by missing_excel_cols, but as a safeguard:
             messagebox.showerror("Excel Error", "Column 'sex' is missing in the Excel file.")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
 
 
@@ -133,7 +159,7 @@ class ParticipantAssigner:
 
             if missing_version_cols_in_row :
                 messagebox.showerror("Data Error", f"Required version columns ({', '.join(missing_version_cols_in_row)}) are missing or empty for existing ID '{participant_id}'.")
-                if self.on_data_processed_callback: self.on_data_processed_callback(None)
+                if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
                 return
 
             fc_version = existing_data_row["FC_version"]
@@ -144,9 +170,20 @@ class ParticipantAssigner:
             messagebox.showinfo("ID Found", f"Participant ID '{participant_id}' already exists. Displaying their information.")
             self.show_assigned_info(participant_id, fc_version, ta_version, em_version, stroop_version, is_existing=True)
             
+            # Finds all folders within a main directory containing a specific substring.
+            folders_found = [p for p in Path(base_save_folder).iterdir() if p.is_dir() and participant_id_stripped_lower in p.name]
+            if len(folders_found) != 1:
+                messagebox.showwarning("Participant folder", f"Participant ID '{participant_id}' multiple folders found! Conservative approach, set the folder to Default value.")
+                participant_folder = None
+            elif len(folders_found) == 0:
+                messagebox.showwarning("Participant folder", f"Participant ID '{participant_id}' has no folder. Conservative approach, set the folder to Default value.")
+                participant_folder = None
+            else:
+                participant_folder = folders_found[0]._str
             self.last_processed_row_data = existing_data_row
             if self.on_data_processed_callback:
-                self.on_data_processed_callback(self.last_processed_row_data)
+                self.on_data_processed_callback(self.last_processed_row_data, 
+                                                participant_folder=participant_folder)
             
             self.master.destroy()
             return
@@ -157,7 +194,7 @@ class ParticipantAssigner:
 
         if df_sex_filtered.empty:
             messagebox.showinfo("No Rows for Sex", f"No rows available for assignment for the selected sex: {selected_sex}.")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             self.master.destroy()
             return
 
@@ -178,7 +215,7 @@ class ParticipantAssigner:
         if not assigned_row_details: # --- Scenario 3: No Rows for Assignment (after sex and priority filtering) ---
             messagebox.showinfo("No Rows", f"No available rows for assignment for participant ID '{participant_id}' with sex '{selected_sex}'. All suitable rows might be taken or do not exist.")
             if self.on_data_processed_callback:
-                self.on_data_processed_callback(None)
+                self.on_data_processed_callback(None, None)
             self.master.destroy()
             return
             
@@ -196,11 +233,11 @@ class ParticipantAssigner:
             df.to_excel(self.excel_file_path, index=False)
         except PermissionError:
             messagebox.showerror("File Error", f"Permission denied for {self.excel_file_path}.")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
         except Exception as e:
             messagebox.showerror("Excel Write Error", f"Error writing to Excel: {e}")
-            if self.on_data_processed_callback: self.on_data_processed_callback(None)
+            if self.on_data_processed_callback: self.on_data_processed_callback(None, None)
             return
 
         fc_version = assigned_row_data["FC_version"]
@@ -233,11 +270,15 @@ class ParticipantAssigner:
             self.sex_var.set(self.sex_options[0]) # Reset sex dropdown
             self.last_processed_row_data = assigned_row_data
             if self.on_data_processed_callback:
-                self.on_data_processed_callback(self.last_processed_row_data)
+                self.on_data_processed_callback(self.last_processed_row_data, 
+                                                participant_folder=output_subfolder_path)
         except Exception as e:
             messagebox.showerror("Save Error", f"Error saving participant data file: {e}")
             if self.on_data_processed_callback:
-                self.on_data_processed_callback(assigned_row_data if 'assigned_row_data' in locals() else None)
+                if 'assigned_row_data' in locals():
+                    self.on_data_processed_callback(assigned_row_data, self.default_save_dir)
+                else:
+                    self.on_data_processed_callback(None, None)
             return
         
         self.master.destroy()

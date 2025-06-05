@@ -33,7 +33,9 @@ class StimulationController:
     COLOR_PROMPT_BG = "\033[38;5;220;48;5;18m"
     COLOR_INPUT = "\033[38;5;27m"
 
-    def __init__(self, config_path='config.json', is_mock_up: bool = False):
+    def __init__(self, config_path='config.json', 
+                 participant_folder: str = None, 
+                 is_mock_up: bool = False):
         """
         Initializes the StimulationController.
 
@@ -43,6 +45,7 @@ class StimulationController:
         self.config = self._load_config(config_path)
         if not self.config:
              raise ValueError("Failed to load configuration.")
+        self._participant_folder = participant_folder
 
         self.rm = visa.ResourceManager() # Manage RM centrally
         self.devices: Dict[str, KeysightEDU] = self._initialize_devices(is_mock_up)
@@ -102,9 +105,9 @@ class StimulationController:
              resource = conf.get('resource_name')
              if resource:
                  if is_mock_up:
-                    devices[name] = KeysightEDUMockup(resource, conf, name=name) 
+                    devices[name] = KeysightEDUMockup(resource, conf, name=name, log_folder_path=self._participant_folder) 
                  else:
-                    devices[name] = KeysightEDU(resource, conf, name=name)
+                    devices[name] = KeysightEDU(resource, conf, name=name, log_folder_path=self._participant_folder) 
              else:
                  logging.warning(f"Resource name missing for device '{name}' in config.")
         return devices

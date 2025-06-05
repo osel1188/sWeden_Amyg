@@ -22,15 +22,18 @@ if __name__ == "__main__":
     print("Starting Stimulation Control Application (GUI Mode)")
 
     # --- I. Set up the participant information and conditions --- #
+    config_file = 'cfg/participant_conditions_path.txt'
     # Holder for data received by the callback, if needed after mainloop
     processed_data_holder = [] 
-    def my_data_handler_callback(row_data_series):
+    participant_folder_holder = []
+    def my_data_handler_callback(row_data_series, participant_folder):
         print("\n--- Callback: Data Received by Script ---")
         if row_data_series is not None:
             print("Type of received data:", type(row_data_series))
             print("Entire row data (Pandas Series):")
             print(row_data_series.to_string())
             processed_data_holder.append(row_data_series) # Store for potential later use
+            participant_folder_holder.append(participant_folder)
         else:
             print("No data was successfully processed in this operation, or an error occurred.")
         print("--- Callback: End of Data ---")
@@ -38,7 +41,7 @@ if __name__ == "__main__":
     try:
         root = tk.Tk()
         # The ParticipantAssigner will now handle closing 'root' after one operation.
-        app = ParticipantAssigner(root, on_data_processed_callback=my_data_handler_callback)
+        app = ParticipantAssigner(root, config_file=config_file, on_data_processed_callback=my_data_handler_callback)
         print("Starting Tkinter mainloop...")
         print("The GUI will perform one operation (assign/load) and then close itself.")
         root.mainloop() # This will run until root.destroy() is called from within the app
@@ -53,7 +56,10 @@ if __name__ == "__main__":
     try:
         # Instantiate the GUI controller
         config_file = 'cfg/keysight_config.json'
-        controller = StimulationController_withGUI(config_path=config_file, condition=processed_data_holder[0]['condition'], is_mock_up=False)
+        controller = StimulationController_withGUI(config_path=config_file, 
+                                                   condition=processed_data_holder[0]['condition'], 
+                                                   participant_folder=participant_folder_holder[0], 
+                                                   is_mock_up=False)
         controller.run()
     except ValueError as e:
         print(f"\nConfiguration or Initialization Error: {e}")
