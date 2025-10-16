@@ -24,7 +24,7 @@ if __name__ == "__main__":
     # --- I. Set up the participant information and conditions --- #
     config_file = 'cfg/participant_conditions_path.txt'
     # Holder for data received by the callback, if needed after mainloop
-    processed_data_holder = [] 
+    processed_data_holder = []
     participant_folder_holder = []
     def my_data_handler_callback(row_data_series, participant_folder):
         print("\n--- Callback: Data Received by Script ---")
