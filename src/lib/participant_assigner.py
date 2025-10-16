@@ -171,12 +171,12 @@ class ParticipantAssigner:
             self.show_assigned_info(participant_id, fc_version, ta_version, em_version, stroop_version, is_existing=True)
             
             # Finds all folders within a main directory containing a specific substring.
-            folders_found = [p for p in Path(base_save_folder).iterdir() if p.is_dir() and participant_id_stripped_lower in p.name]
-            if len(folders_found) != 1:
-                messagebox.showwarning("Participant folder", f"Participant ID '{participant_id}' multiple folders found! Conservative approach, set the folder to Default value.")
-                participant_folder = None
-            elif len(folders_found) == 0:
+            folders_found = [p for p in Path(base_save_folder).iterdir() if p.is_dir() and participant_id in p.name]
+            if len(folders_found) == 0:
                 messagebox.showwarning("Participant folder", f"Participant ID '{participant_id}' has no folder. Conservative approach, set the folder to Default value.")
+                participant_folder = None
+            elif len(folders_found) != 1:
+                messagebox.showwarning("Participant folder", f"Participant ID '{participant_id}' multiple folders found! Conservative approach, set the folder to Default value.")
                 participant_folder = None
             else:
                 participant_folder = folders_found[0]._str
