@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field, InitVar
 from typing import List
 
 @dataclass
@@ -9,16 +9,20 @@ class Electrode:
     id: int
 
 @dataclass
-class ElectrodePair:
-    """Represents a pair of electrodes and their spatial relationship."""
+class ElectrodeGroup:
+    """Represents a validated group of electrodes."""
     electrode_list: List[Electrode]
     target_voltage: float = 0.0
-
-    def __init__(self, electrode_list, *, expected_electrodes: int = 2):
-        if len(self.electrode_list) != expected_electrodes:
-            raise ValueError("ElectrodePair must consist of exactly two Electrodes.")
+    expected_count: int = 2
 
     def __post_init__(self):
-        if len(self.electrode_list) != 2:
-            raise ValueError("ElectrodePair must consist of exactly two Electrodes.")
-    
+        """
+        Performs validation after the object has been initialized by the dataclass.
+        It now accesses expected_count as a regular instance property (self.expected_count).
+        """
+        if len(self.electrode_list) != self.expected_count:
+            # Dynamic error message based on the expected count
+            raise ValueError(
+                f"ElectrodeGroup must consist of exactly {self.expected_count} Electrodes, "
+                f"but {len(self.electrode_list)} were provided."
+            )
