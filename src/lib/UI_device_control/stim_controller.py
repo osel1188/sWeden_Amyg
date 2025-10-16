@@ -10,6 +10,7 @@ import sys
 import logging
 import pyvisa as visa # Import pyvisa here to close ResourceManager
 from typing import Dict
+from matplotlib.widgets import Button
 
 from pathlib import Path
 
@@ -423,18 +424,56 @@ class StimulationController:
         voltage_trajectories[:, -1] = target_voltages_arr
 
         if preview:
-            plt.figure(figsize=(10, 6))
+            # Use a dictionary to store the result, as it's mutable and can be changed
+            # by the callback functions. Default to 'Abort'.
+            choice = {'result': 'Abort'}
+
+            # --- Callback functions for the buttons ---
+            def proceed(event):
+                """Sets result to 'Proceed' and closes the plot."""
+                choice['result'] = 'Proceed'
+                plt.close()
+
+            def abort(event):
+                """Sets result to 'Abort' and closes the plot."""
+                choice['result'] = 'Abort'
+                plt.close()
+
+            # --- Plotting Code ---
+            # Create a figure and axes object
+            fig, ax = plt.subplots(figsize=(10, 6.5))
+            # Adjust the main plot to make space for the buttons at the bottom
+            plt.subplots_adjust(bottom=0.2)
+
             for ch_idx in range(len(start_voltages)):
-                plt.plot(t, voltage_trajectories[ch_idx, :], label=f'Channel {ch_idx + 1}')
-            plt.title(f'Voltage Ramp Trajectories ({ramp_direction})')
-            plt.xlabel('Time (s)')
-            plt.ylabel('Voltage (V)')
-            plt.legend()
-            plt.grid(True)
-            plt.ylim(bottom=0) # Ensure y-axis starts at 0
-            plt.tight_layout()
+                ax.plot(t, voltage_trajectories[ch_idx, :], label=f'Channel {ch_idx + 1}')
+
+            ax.set_title(f'Voltage Ramp Trajectories ({ramp_direction})')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('Voltage (V)')
+            ax.legend()
+            ax.grid(True)
+            ax.set_ylim(bottom=0)
+
+            # --- Create Axes for Buttons ---
+            # The arguments are [left, bottom, width, height] in figure coordinates
+            ax_abort = fig.add_axes([0.65, 0.05, 0.1, 0.075])
+            ax_proceed = fig.add_axes([0.77, 0.05, 0.1, 0.075])
+
+            # --- Create Button Instances ---
+            button_abort = Button(ax_abort, 'Abort', color='lightcoral', hovercolor='red')
+            button_proceed = Button(ax_proceed, 'Proceed', color='lightgreen', hovercolor='green')
+
+            # --- Register the callbacks ---
+            button_abort.on_clicked(abort)
+            button_proceed.on_clicked(proceed)
+
             print("Displaying voltage ramp preview plot...")
-            plt.show(block=True) # Display the plot - this blocks execution until closed
+            plt.show(block=True) # Display the plot and wait
+
+            # --- Abort the execution ---
+            if choice['result'] == 'Abort':
+                return 
 
         # --- Ramp Execution ---
         self._status_update_func(f"Starting ramp {ramp_direction}...", "ramp")
