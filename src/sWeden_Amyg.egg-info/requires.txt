@@ -1,0 +1,3 @@
+pyvisa
+pytest
+pytest-mock

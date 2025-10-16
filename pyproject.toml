@@ -1,0 +1,23 @@
+# pyproject.toml
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sWeden_Amyg"
+version = "3.0.0"
+authors = [
+  { name="Basil Duvernoy", email="basil.duvernoy@liu.se" },
+]
+description = ""
+requires-python = ">=3.13"
+# List your project's dependencies here
+dependencies = [
+    "pyvisa",
+    "pytest",
+    "pytest-mock",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]  # Look for packages in the 'src' directory
