@@ -30,7 +30,7 @@ def mock_visa(mocker):
     
     # MODIFICATION: Patch the ResourceManager class in the specific module where it is being used.
     # This is the crucial change to ensure the driver code uses our mock.
-    mocker.patch('ti_system.waveform_generators.keysight_edu33212A.visa.ResourceManager', return_value=mock_rm)
+    mocker.patch('temporal_interference.waveform_generators.keysight_edu33212A.visa.ResourceManager', return_value=mock_rm)
 
     # Yield both mocks as a tuple so tests can make assertions on them
     yield mock_rm, mock_instrument
@@ -63,7 +63,7 @@ def test_connection_failure_raises_exception(mocker):
     # Use a valid integer error code for VisaIOError.
     mock_rm.open_resource.side_effect = pyvisa.VisaIOError(-1073807343)
     # MODIFICATION: Ensure the patch target matches the one in the main fixture for consistency.
-    mocker.patch('ti_system.waveform_generators.keysight_edu33212A.visa.ResourceManager', return_value=mock_rm)
+    mocker.patch('temporal_interference.waveform_generators.keysight_edu33212A.visa.ResourceManager', return_value=mock_rm)
     
     driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
     
