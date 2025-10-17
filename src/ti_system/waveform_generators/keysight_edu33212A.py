@@ -1,10 +1,11 @@
 import pyvisa as visa
 import time
 import logging
-from typing import  Optional, Any, Dict
+import os
+from typing import Optional, Any, Dict
 
 from .waveform_generator import (
-    AbstractWaveformGenerator, 
+    AbstractWaveformGenerator,
     OutputState,
     WaveformShape
 )
@@ -16,28 +17,38 @@ class KeysightEDU33212A(AbstractWaveformGenerator):
     """
     A concrete implementation for a Keysight EDU33220A series waveform generator.
 
-    This class focuses SOLELY on translating the abstract interface methods into
-    the specific SCPI commands for this instrument. It does not handle logging
-    configuration or application-level logic.
+    This class translates the abstract interface methods into SCPI commands
+    and provides high-level control functionalities.
     """
-
-    def __init__(self, resource_id: str, timeout: int = 10000, rst_delay: float = 1.0) -> None:
+    def __init__(
+        self,
+        resource_id: str,
+        name: str = "",
+        timeout: int = 10000,
+        rst_delay: float = 1.0,
+        clr_delay: float = 0.1
+    ) -> None:
         """
         Initializes the generator driver.
 
         Args:
             resource_id (str): The VISA resource identifier.
+            name (str, optional): A user-friendly name for logging purposes. Defaults to "".
             timeout (int): The VISA communication timeout in milliseconds.
             rst_delay (float): The delay in seconds after a reset command.
+            clr_delay (float): The delay in seconds after a clear command.
         """
         super().__init__(resource_id)
+        self.name = name or resource_id # Use resource_id if name is empty
         self._timeout = timeout
         self._rst_delay = rst_delay
+        self._clr_delay = clr_delay
         self._instrument: Optional[visa.Resource] = None
         self._rm = visa.ResourceManager()
-        log.info(f"Driver for KeysightEDU33212A created for resource: {self.resource_id}")
+        log.info(f"Driver for KeysightEDU33212A created for resource: {self.resource_id} (Name: '{self.name}')")
 
-    # --- Low-level Communication (Internal) ---
+
+    # --- Low-level Communication ---
 
     def _write(self, command: str) -> None:
         """Sends a command to the instrument."""
@@ -65,10 +76,11 @@ class KeysightEDU33212A(AbstractWaveformGenerator):
             self._instrument = self._rm.open_resource(self.resource_id)
             self._instrument.timeout = self._timeout
             self._instrument.clear()
-            
+            time.sleep(self._clr_delay)
+
             identity = self._query("*IDN?")
             log.info(f"Successfully connected to: {identity}")
-            
+
             self._write('*RST')
             time.sleep(self._rst_delay)
             self._write('*CLS') # Clear status
@@ -76,7 +88,6 @@ class KeysightEDU33212A(AbstractWaveformGenerator):
         except visa.VisaIOError as e:
             self._instrument = None
             log.error(f"Failed to connect to {self.resource_id}: {e}")
-            # Raise a standard exception to be handled by the application
             raise ConnectionError(f"VISA I/O Error connecting to {self.resource_id}") from e
 
     def disconnect(self) -> None:
@@ -88,6 +99,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator):
                 self.set_output_state(1, OutputState.OFF)
                 self.set_output_state(2, OutputState.OFF)
                 self._instrument.clear()
+                time.sleep(self._clr_delay)
                 self._instrument.close()
                 log.info("Disconnected successfully.")
             except visa.VisaIOError as e:
@@ -106,12 +118,77 @@ class KeysightEDU33212A(AbstractWaveformGenerator):
     def set_amplitude(self, channel: int, amplitude: float) -> None:
         """Sets the peak-to-peak voltage amplitude (Vpp)."""
         self._write(f':SOURce{channel}:VOLTage {amplitude:.4f}')
-        
+
     def set_offset(self, channel: int, offset: float) -> None:
         self._write(f':SOURce{channel}:VOLTage:OFFSet {offset:.4f}')
 
     def set_waveform_shape(self, channel: int, shape: WaveformShape) -> None:
         self._write(f':SOURce{channel}:FUNCtion {shape.value}')
+
+    # --- Granular Getters ---
+    def get_output_state(self, channel: int) -> OutputState:
+        """Queries the output state of a specific channel."""
+        state_str = self._query(f":OUTPut{channel}:STATe?")
+        # Check for either '1' or 'ON' (case-insensitive) for the ON state.
+        return OutputState.ON if '1' in state_str or 'ON' in state_str.upper() else OutputState.OFF
+
+    def get_frequency(self, channel: int) -> float:
+        """Queries the frequency of a specific channel."""
+        return float(self._query(f":SOURce{channel}:FREQuency?"))
+
+    def get_amplitude(self, channel: int) -> float:
+        """Queries the peak-to-peak voltage amplitude (Vpp) of a specific channel."""
+        return float(self._query(f":SOURce{channel}:VOLTage?"))
+
+    def get_offset(self, channel: int) -> float:
+        """Queries the DC offset voltage of a specific channel."""
+        return float(self._query(f":SOURce{channel}:VOLTage:OFFSet?"))
+
+    # --- High-Level and Utility Methods ---
+
+    def apply_sinusoid(self, channel: int, frequency: float, amplitude: float, offset: float = 0.0) -> None:
+        """Configures the source to output a sinusoid with specified parameters."""
+        # Using a single APPLY command is often more efficient on the instrument side.
+        self._write(f':SOURce{channel}:APPLy:SINusoid {frequency},{amplitude:.4f},{offset:.4f}')
+        log.info(f"Applied Sinusoid to Ch{channel}: {frequency} Hz, {amplitude:.4f} Vpp, {offset:.4f} V")
+
+    def setup_defaults(self, defaults_config: Dict[str, Any]) -> None:
+        """Applies a dictionary of default settings to the instrument."""
+        log.info(f"Setting up defaults for {self.name}...")
+        channels = defaults_config.get('source_channels', [1, 2])
+        for ch in channels:
+            self.set_output_state(ch, OutputState.OFF)
+            self._write(f":OUTPut{ch}:LOAD {defaults_config.get('load_impedance', 'INFinity')}")
+            self._write(f":SOURce{ch}:FUNCtion {defaults_config.get('function', 'SIN')}")
+            self._write(f":SOURce{ch}:BURSt:STATe {1 if defaults_config.get('burst_state', True) else 0}")
+            self._write(f":SOURce{ch}:BURSt:NCYCles {defaults_config.get('burst_num_cycles', 'INF')}")
+            self._write(f":SOURce{ch}:BURSt:MODE {defaults_config.get('burst_mode', 'TRIG')}")
+            log.debug(f"Defaults applied to channel {ch} for {self.name}.")
+
+    def trigger(self) -> None:
+        """Sends a software trigger (*TRG)."""
+        log.info(f"Sending software trigger to {self.name}.")
+        self._write('*TRG')
+
+    def abort(self) -> None:
+        """Aborts the current waveform generation."""
+        log.info(f"Sending abort command to {self.name}.")
+        self._write(':ABORt')
+
+    def beep(self) -> None:
+        """Triggers the system beeper for auditory feedback."""
+        self._write('SYSTem:BEEPer:IMMediate')
+
+    def wait_opc(self) -> bool:
+        """Waits for the instrument to complete all pending operations."""
+        try:
+            self._query("*OPC?")
+            return True
+        except visa.VisaIOError as e:
+            log.warning(f"Error during *OPC? query for {self.name}: {e}")
+            return False
+
+    # --- Instrument Status ---
 
     def get_status(self) -> Dict[str, Any]:
         """Queries the instrument for the status of both channels."""
@@ -122,13 +199,13 @@ class KeysightEDU33212A(AbstractWaveformGenerator):
         for ch in [1, 2]:
             try:
                 ch_status = {
-                    "output_state": self._query(f":OUTPut{ch}:STATe?"),
+                    "output_state": self.get_output_state(ch).value,
                     "waveform": self._query(f":SOURce{ch}:FUNCtion?"),
-                    "frequency_hz": float(self._query(f":SOURce{ch}:FREQuency?")),
-                    "amplitude_vpp": float(self._query(f":SOURce{ch}:VOLTage?")),
-                    "offset_v": float(self._query(f":SOURce{ch}:VOLTage:OFFSet?")),
+                    "frequency_hz": self.get_frequency(ch),
+                    "amplitude_vpp": self.get_amplitude(ch),
+                    "offset_v": self.get_offset(ch),
                 }
                 status[f'channel_{ch}'] = ch_status
             except (visa.VisaIOError, ValueError) as e:
-                 status[f'channel_{ch}'] = f"Error querying status: {e}"
+                status[f'channel_{ch}'] = f"Error querying status: {e}"
         return status

@@ -168,10 +168,247 @@ def test_get_status_success(mock_visa):
     assert status['connection'] == 'active'
     assert status['identity'] == "KEYSIGHT,EDU33212A,12345,1.0.0"
     
-    assert status['channel_1']['output_state'] == "1"
+    assert status['channel_1']['output_state'] == "ON"
     assert status['channel_1']['waveform'] == "SIN"
     assert status['channel_1']['frequency_hz'] == 1000.0
     assert status['channel_1']['amplitude_vpp'] == 2.5
     assert status['channel_1']['offset_v'] == 0.1
     
     assert status['channel_2']['frequency_hz'] == 5000.0
+
+
+@pytest.mark.parametrize("channel, state, expected_scpi", [
+    (1, OutputState.ON, ":OUTPut1:STATe ON"),
+    (2, OutputState.OFF, ":OUTPut2:STATe OFF"),
+])
+def test_set_output_state(mock_visa, channel, state, expected_scpi):
+    """Tests the set_output_state method using the OutputState enum."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+    
+    driver.set_output_state(channel, state)
+    mock_instrument.write.assert_called_once_with(expected_scpi)
+
+
+@pytest.mark.parametrize("channel, amplitude, expected_scpi", [
+    (1, 5.0, ":SOURce1:VOLTage 5.0000"),
+    (2, 2.5555, ":SOURce2:VOLTage 2.5555"),
+])
+def test_set_amplitude(mock_visa, channel, amplitude, expected_scpi):
+    """Tests the set_amplitude method for Vpp."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+
+    driver.set_amplitude(channel, amplitude)
+    mock_instrument.write.assert_called_once_with(expected_scpi)
+
+
+@pytest.mark.parametrize("channel, offset, expected_scpi", [
+    (1, 0.5, ":SOURce1:VOLTage:OFFSet 0.5000"),
+    (2, -0.12, ":SOURce2:VOLTage:OFFSet -0.1200"),
+])
+def test_set_offset(mock_visa, channel, offset, expected_scpi):
+    """Tests the set_offset method."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+
+    driver.set_offset(channel, offset)
+    mock_instrument.write.assert_called_once_with(expected_scpi)
+
+
+@pytest.mark.parametrize("channel, mock_response, expected_state", [
+    (1, "1", OutputState.ON),
+    (2, "0", OutputState.OFF),
+    (1, "ON", OutputState.ON), # Some devices might return text
+])
+def test_get_output_state(mock_visa, channel, mock_response, expected_state):
+    """Tests that get_output_state correctly parses the instrument response."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    
+    # Reset mock after connection to isolate the test assertion
+    mock_instrument.reset_mock()
+    
+    mock_instrument.query.return_value = mock_response
+    state = driver.get_output_state(channel)
+    
+    mock_instrument.query.assert_called_once_with(f":OUTPut{channel}:STATe?")
+    assert state == expected_state
+
+
+@pytest.mark.parametrize("channel, mock_response, expected_value", [
+    (1, "1.234000E+03", 1234.0),
+    (2, "5.000000E+00", 5.0),
+])
+def test_get_frequency(mock_visa, channel, mock_response, expected_value):
+    """Tests that get_frequency correctly parses the instrument response."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    
+    # Reset mock after connection to isolate the test assertion
+    mock_instrument.reset_mock()
+
+    mock_instrument.query.return_value = mock_response
+    freq = driver.get_frequency(channel)
+    
+    mock_instrument.query.assert_called_once_with(f":SOURce{channel}:FREQuency?")
+    assert freq == expected_value
+
+
+@pytest.mark.parametrize("channel, mock_response, expected_value", [
+    (1, "2.500000E+00", 2.5),
+    (2, "1.000000E-01", 0.1),
+])
+def test_get_amplitude(mock_visa, channel, mock_response, expected_value):
+    """Tests that get_amplitude correctly parses the instrument response."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    
+    # Reset mock after connection to isolate the test assertion
+    mock_instrument.reset_mock()
+
+    mock_instrument.query.return_value = mock_response
+    amp = driver.get_amplitude(channel)
+    
+    mock_instrument.query.assert_called_once_with(f":SOURce{channel}:VOLTage?")
+    assert amp == expected_value
+
+
+@pytest.mark.parametrize("channel, mock_response, expected_value", [
+    (1, "5.000000E-01", 0.5),
+    (2, "-2.000000E-02", -0.02),
+])
+def test_get_offset(mock_visa, channel, mock_response, expected_value):
+    """Tests that get_offset correctly parses the instrument response."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    
+    # Reset mock after connection to isolate the test assertion
+    mock_instrument.reset_mock()
+
+    mock_instrument.query.return_value = mock_response
+    offset = driver.get_offset(channel)
+    
+    mock_instrument.query.assert_called_once_with(f":SOURce{channel}:VOLTage:OFFSet?")
+    assert offset == expected_value
+
+
+def test_apply_sinusoid(mock_visa):
+    """Tests the high-level apply_sinusoid method."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+    
+    driver.apply_sinusoid(channel=1, frequency=1000, amplitude=2.0, offset=0.1)
+    
+    expected_scpi = ":SOURce1:APPLy:SINusoid 1000,2.0000,0.1000"
+    mock_instrument.write.assert_called_once_with(expected_scpi)
+
+
+def test_setup_defaults(mock_visa):
+    """Tests that the setup_defaults method applies a configuration dictionary."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+    
+    config = {
+        'load_impedance': '50',
+        'function': 'SQU',
+        'burst_state': True,
+        'burst_num_cycles': 10,
+        'burst_mode': 'GAT'
+    }
+    
+    driver.setup_defaults(config)
+    
+    expected_calls = [
+        # Channel 1
+        call(':OUTPut1:STATe OFF'),
+        call(':OUTPut1:LOAD 50'),
+        call(':SOURce1:FUNCtion SQU'),
+        call(':SOURce1:BURSt:STATe 1'),
+        call(':SOURce1:BURSt:NCYCles 10'),
+        call(':SOURce1:BURSt:MODE GAT'),
+        # Channel 2
+        call(':OUTPut2:STATe OFF'),
+        call(':OUTPut2:LOAD 50'),
+        call(':SOURce2:FUNCtion SQU'),
+        call(':SOURce2:BURSt:STATe 1'),
+        call(':SOURce2:BURSt:NCYCles 10'),
+        call(':SOURce2:BURSt:MODE GAT'),
+    ]
+    mock_instrument.write.assert_has_calls(expected_calls)
+
+
+def test_trigger(mock_visa):
+    """Tests the trigger method."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+    
+    driver.trigger()
+    mock_instrument.write.assert_called_once_with('*TRG')
+
+
+def test_abort(mock_visa):
+    """Tests the abort method."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+    
+    driver.abort()
+    mock_instrument.write.assert_called_once_with(':ABORt')
+
+
+def test_beep(mock_visa):
+    """Tests the beep method."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+    
+    driver.beep()
+    mock_instrument.write.assert_called_once_with('SYSTem:BEEPer:IMMediate')
+
+
+def test_wait_opc(mock_visa):
+    """Tests that wait_opc sends the correct query and returns True on success."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+
+    mock_instrument.query.return_value = "1"
+    
+    result = driver.wait_opc()
+    
+    mock_instrument.query.assert_called_once_with("*OPC?")
+    assert result is True
+
+
+def test_wait_opc_failure(mock_visa):
+    """Tests that wait_opc returns False if a VisaIOError occurs."""
+    _mock_rm, mock_instrument = mock_visa
+    driver = KeysightEDU33212A(DUMMY_RESOURCE_ID)
+    driver.connect()
+    mock_instrument.reset_mock()
+
+    mock_instrument.query.side_effect = pyvisa.VisaIOError(-1073807339) # Timeout error code
+    
+    result = driver.wait_opc()
+    
+    assert result is False
