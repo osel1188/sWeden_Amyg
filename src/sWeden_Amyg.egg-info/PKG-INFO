@@ -1,8 +1,0 @@
-Metadata-Version: 2.4
-Name: sWeden_Amyg
-Version: 3.0.0
-Author-email: Basil Duvernoy <basil.duvernoy@liu.se>
-Requires-Python: >=3.13
-Requires-Dist: pyvisa
-Requires-Dist: pytest
-Requires-Dist: pytest-mock
