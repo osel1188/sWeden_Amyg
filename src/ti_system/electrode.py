@@ -26,3 +26,7 @@ class ElectrodeGroup:
                 f"ElectrodeGroup must consist of exactly {self.expected_count} Electrodes, "
                 f"but {len(self.electrode_list)} were provided."
             )
+            
+    def __len__(self) -> int:
+        """Returns the number of electrodes in the group."""
+        return len(self.electrode_list)
