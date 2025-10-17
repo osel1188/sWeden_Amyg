@@ -2,11 +2,11 @@ from typing import List
 from .electrode import ElectrodeGroup
 from .waveform_generators.waveform_generator import AbstractWaveformGenerator
 
-class TIChannel:
+class TISystem:
     """Represents a single Temporal Interference (TI) channel composed of two electrode pairs."""
     def __init__(self, region: str, electrode_pairs: ElectrodeGroup):
         if len(electrode_pairs) != 2:
-            raise ValueError("TIChannel must be composed of exactly two ElectrodePairs.")
+            raise ValueError("TISystem must be composed of exactly two ElectrodePairs.")
         self.region: str = region
         self.electrode_pairs: ElectrodeGroup = electrode_pairs
 
