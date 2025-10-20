@@ -1,8 +1,21 @@
-import pyvisa as visa
+# --- Conditional VISA Import ---
+from .config import USE_MOCK
+
+if USE_MOCK:
+    # Use the local mock_visa module
+    from . import mock_visa as visa
+else:
+    # Use the real, installed pyvisa library
+    try:
+        import pyvisa as visa
+    except ImportError:
+        # Handle case where pyvisa is not installed in live mode
+        logging.critical("pyvisa is not installed. Run 'pip install pyvisa'")
+        raise
+
 import time
 import logging
-import os
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 
 from .waveform_generator import (
     AbstractWaveformGenerator,
@@ -13,7 +26,7 @@ from .waveform_generator import (
 # Setup a standard logger. The application, not the driver, decides where logs go.
 log = logging.getLogger(__name__)
 
-class KeysightEDU33212A(AbstractWaveformGenerator):
+class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A"):
     """
     A concrete implementation for a Keysight EDU33220A series waveform generator.
 
@@ -43,6 +56,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator):
         self._timeout = timeout
         self._rst_delay = rst_delay
         self._clr_delay = clr_delay
+        self.channels: List[int] = []
         self._instrument: Optional[visa.Resource] = None
         self._rm = visa.ResourceManager()
         log.info(f"Driver for KeysightEDU33212A created for resource: {self.resource_id} (Name: '{self.name}')")
@@ -152,21 +166,64 @@ class KeysightEDU33212A(AbstractWaveformGenerator):
         self._write(f':SOURce{channel}:APPLy:SINusoid {frequency},{amplitude:.4f},{offset:.4f}')
         log.info(f"Applied Sinusoid to Ch{channel}: {frequency} Hz, {amplitude:.4f} Vpp, {offset:.4f} V")
 
-    def setup_defaults(self, defaults_config: Dict[str, Any]) -> None:
+    def initialize_device_settings(self, config: Dict[str, Any]) -> None:
         """Applies a dictionary of default settings to the instrument."""
         log.info(f"Setting up defaults for {self.name}...")
-        channels = defaults_config.get('source_channels', [1, 2])
-        for ch in channels:
+        self.channels = config.get('source_channels', [1, 2])
+        for ch in self.channels:
             self.set_output_state(ch, OutputState.OFF)
-            self._write(f":OUTPut{ch}:LOAD {defaults_config.get('load_impedance', 'INFinity')}")
-            self._write(f":SOURce{ch}:FUNCtion {defaults_config.get('function', 'SIN')}")
-            self._write(f":SOURce{ch}:BURSt:STATe {1 if defaults_config.get('burst_state', True) else 0}")
-            self._write(f":SOURce{ch}:BURSt:NCYCles {defaults_config.get('burst_num_cycles', 'INF')}")
-            self._write(f":SOURce{ch}:BURSt:MODE {defaults_config.get('burst_mode', 'TRIG')}")
+            self._write(f":OUTPut{ch}:LOAD {config.get('load_impedance', 'INFinity')}")
+            self._write(f":SOURce{ch}:FUNCtion {config.get('function', 'SIN')}")
+            self._write(f":SOURce{ch}:BURSt:STATe {1 if config.get('burst_state', True) else 0}")
+            self._write(f":SOURce{ch}:BURSt:NCYCles {config.get('burst_num_cycles', 'INF')}")
+            self._write(f":SOURce{ch}:BURSt:MODE {config.get('burst_mode', 'TRIG')}")
             log.debug(f"Defaults applied to channel {ch} for {self.name}.")
 
+    def set_trigger_source_bus(self) -> None:
+        """Sets the trigger source to BUS (software/internal)."""
+        for ch in self.channels:
+            self._write(f':TRIGger{ch}:SOURce BUS')
+            log.debug(f"Device '{self.name}': Channel {ch} trigger source set to BUS")
+        self.enable_output_trigger()
+    
+    def set_trigger_source_external(self) -> None:
+        """Sets the trigger source to EXT (external hardware trigger)."""
+        for ch in self.channels:
+            self._write(f':TRIGger{ch}:SOURce EXT')
+            log.debug(f"Device '{self.name}': Channel {ch} trigger source set to EXT")
+        self.enable_output_trigger()
+    
+    def set_output_trigger(self, state: str) -> None:
+        """
+        Sets the output trigger signal state for all channels.
+        This configures the instrument to start channels when trigger mode is ON.
+        Args:
+            state (str): The desired trigger state. Must be 'ON' or 'OFF'
+                         (case-insensitive).
+        """
+        # Normalize and validate state
+        norm_state = state.upper().strip()
+        if norm_state not in ('ON', 'OFF'):
+            raise ValueError(f"Invalid state '{state}'. Must be 'ON' or 'OFF'.")
+        
+        # Determine log message based on normalized state
+        log_msg = "enabled" if norm_state == 'ON' else "disabled"
+        
+        for ch in self.channels:
+            self._write(f':OUTPut{ch}:TRIGger:STATe {norm_state}')
+            log.debug(f"Device '{self.name}': Channel {ch} {log_msg} for output trigger.")
+
+    def enable_output_trigger(self) -> None:
+        self.set_output_trigger('ON')
+
+    def disable_output_trigger(self) -> None:
+        self.set_output_trigger('OFF')
+    
     def trigger(self) -> None:
-        """Sends a software trigger (*TRG)."""
+        """
+        Sends a software trigger (*TRG). 
+        It will work only if the device is set to source bus trigger.
+        """
         log.info(f"Sending software trigger to {self.name}.")
         self._write('*TRG')
 

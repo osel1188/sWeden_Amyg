@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Type, Optional, Any, Dict
+from typing import Type, Optional, Any, Dict, TypeVar
 
 # ======================================================================================
 # Helper Enumerations for a Type-Safe API
@@ -23,44 +23,87 @@ class WaveformShape(Enum):
 # Cohesive Abstract Base Class
 # ======================================================================================
 
+# Type variable for the factory
+T_Generator = TypeVar('T_Generator', bound='AbstractWaveformGenerator')
+
 class AbstractWaveformGenerator(ABC):
     """
     Abstract Base Class for a signal/waveform generator.
-
+        
     This class defines a standard interface for instrument control, including
     connection management, channel configuration, and status reporting. It is
     designed to be used as a context manager to ensure proper resource handling.
     """
+    
+    # --- Class-level Registry for Factory Pattern ---
+    # This dictionary will map model_id strings to the class itself.
+    _driver_registry: Dict[str, Type[T_Generator]] = {}
+
+    def __init_subclass__(cls, *, model_id: str, **kwargs: Any) -> None:
+        """
+        Magic method to automatically register any subclass.
+        
+        When a new class inherits from AbstractWaveformGenerator and provides
+        a 'model_id' keyword argument in its class definition, it will be
+        automatically added to the registry.
+        
+        Example:
+            class MyDriver(AbstractWaveformGenerator, model_id="my_driver_id"):
+                ...
+        """
+        super().__init_subclass__(**kwargs)
+        if model_id in cls._driver_registry:
+            raise ValueError(
+                f"Error: Duplicate model_id '{model_id}' attempting to "
+                f"register class {cls.__name__}. "
+                f"Already registered to {cls._driver_registry[model_id].__name__}."
+            )
+        cls._driver_registry[model_id] = cls
+        # print(f"Registered driver: {model_id} -> {cls.__name__}") # Optional: for debugging
+        
 
     def __init__(self, resource_id: str, **kwargs: Any) -> None:
         """
         Initializes the generator with a specific hardware resource identifier.
-
-        Args:
-            resource_id (str): The identifier for the hardware device,
-                               e.g., a VISA address like 'GPIB0::10::INSTR'.
-            **kwargs: Additional device-specific configuration parameters.
+        ... [rest of init method] ...
         """
         self.resource_id = resource_id
         # Concrete implementations can handle kwargs for custom setup.
 
-    # --- Connection Management (Context Manager) ---
+    # --- Factory Accessor Method (Static) ---
+    
+    @staticmethod
+    def get_registered_drivers() -> Dict[str, Type[T_Generator]]:
+        """Returns a copy of the driver registry."""
+        return AbstractWaveformGenerator._driver_registry.copy()
+        
+    @staticmethod
+    def get_driver_class(model_id: str) -> Type[T_Generator]:
+        """
+        Looks up and returns a driver class from the registry.
+        
+        Note: This requires the module containing the driver to have been
+        imported at least once to trigger registration.
+        """
+        try:
+            return AbstractWaveformGenerator._driver_registry[model_id]
+        except KeyError:
+            raise ValueError(
+                f"No driver registered with model_id: '{model_id}'. "
+                f"Available drivers: {list(AbstractWaveformGenerator._driver_registry.keys())}"
+            )
 
+    # --- Connection Management (Context Manager) ---
+    
     @abstractmethod
     def connect(self) -> None:
-        """
-        Establishes a connection to the hardware device.
-        Should raise an exception on failure.
-        """
         pass
 
     @abstractmethod
     def disconnect(self) -> None:
-        """Closes the connection to the hardware device and performs cleanup."""
         pass
 
     def __enter__(self) -> 'AbstractWaveformGenerator':
-        """Context manager entry point: connects to the device."""
         self.connect()
         return self
 
@@ -68,9 +111,8 @@ class AbstractWaveformGenerator(ABC):
                  exc_type: Optional[Type[BaseException]],
                  exc_value: Optional[BaseException],
                  traceback: Optional[Any]) -> None:
-        """Context manager exit point: disconnects from the device."""
         self.disconnect()
-
+    
     # --- Instrument Status ---
 
     @abstractmethod
