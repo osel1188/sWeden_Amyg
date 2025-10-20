@@ -15,6 +15,7 @@ else:
 
 import time
 import logging
+import threading  # <-- Import threading for lock
 from typing import Optional, Any, Dict, List
 
 from .waveform_generator import (
@@ -32,7 +33,19 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
 
     This class translates the abstract interface methods into SCPI commands
     and provides high-level control functionalities.
+    
+    It uses a class-level, thread-safe connection manager to ensure that
+    only the first instance connecting to a specific resource_id performs
+    an instrument reset (*RST). Subsequent instances attach to the
+    existing handle.
     """
+    
+    # --- Class-level shared resource management ---
+    _rm = visa.ResourceManager()
+    _active_connections: Dict[str, Dict[str, Any]] = {}
+    _resource_lock = threading.Lock()
+    # ----------------------------------------------
+
     def __init__(
         self,
         resource_id: str,
@@ -58,7 +71,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         self._clr_delay = clr_delay
         self.channels: List[int] = []
         self._instrument: Optional[visa.Resource] = None
-        self._rm = visa.ResourceManager()
+        # self._rm is now a class variable, no need to init here.
         log.info(f"Driver for KeysightEDU33212A created for resource: {self.resource_id} (Name: '{self.name}')")
 
 
@@ -81,45 +94,121 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
     # --- Connection Management (Implementation of Abstract Methods) ---
 
     def connect(self) -> None:
-        """Establishes connection to the device and resets it."""
+        """
+        Establishes connection to the device.
+
+        If this is the first instance for this resource_id, it opens
+        the connection and resets the instrument.
+        If an existing connection is found, it attaches to it without
+        resetting.
+        """
         if self._instrument:
-            log.warning("Already connected. Ignoring connect() call.")
+            log.warning(f"Instance '{self.name}' already connected. Ignoring connect() call.")
             return
-        try:
-            log.info(f"Attempting to connect to {self.resource_id}...")
-            self._instrument = self._rm.open_resource(self.resource_id)
-            self._instrument.timeout = self._timeout
-            self._instrument.clear()
-            time.sleep(self._clr_delay)
 
-            identity = self._query("*IDN?")
-            log.info(f"Successfully connected to: {identity}")
-
-            self._write('*RST')
-            time.sleep(self._rst_delay)
-            self._write('*CLS') # Clear status
-            log.info(f"Instrument {self.resource_id} has been reset.")
-        except visa.VisaIOError as e:
-            self._instrument = None
-            log.error(f"Failed to connect to {self.resource_id}: {e}")
-            raise ConnectionError(f"VISA I/O Error connecting to {self.resource_id}") from e
-
-    def disconnect(self) -> None:
-        """Turns off outputs and closes the VISA connection."""
-        if self._instrument:
-            log.info(f"Disconnecting from {self.resource_id}...")
+        # Acquire lock to ensure atomic connect/check operations
+        with KeysightEDU33212A._resource_lock:
+            # Check if another instance has already connected to this resource
+            if self.resource_id in KeysightEDU33212A._active_connections:
+                # --- Subsequent Instance Path ---
+                log.info(f"Attaching '{self.name}' to existing connection for {self.resource_id}.")
+                shared_data = KeysightEDU33212A._active_connections[self.resource_id]
+                
+                # Assign the shared handle to this instance
+                self._instrument = shared_data["handle"]
+                
+                # Increment the reference count
+                shared_data["ref_count"] += 1
+                
+                log.info(f"Attached. Ref count for {self.resource_id} is now {shared_data['ref_count']}.")
+                # Skip reset, clear, and IDN query as it was done by the first instance
+                return
+            
+            # --- First Instance Path ---
             try:
-                # Turn off outputs as a safety measure
-                self.set_output_state(1, OutputState.OFF)
-                self.set_output_state(2, OutputState.OFF)
+                log.info(f"First instance '{self.name}' connecting to {self.resource_id}. Performing full setup...")
+                
+                # Use the class-level resource manager
+                self._instrument = KeysightEDU33212A._rm.open_resource(self.resource_id)
+                self._instrument.timeout = self._timeout
                 self._instrument.clear()
                 time.sleep(self._clr_delay)
-                self._instrument.close()
-                log.info("Disconnected successfully.")
+
+                identity = self._query("*IDN?")
+                log.info(f"Successfully connected to: {identity}")
+
+                self._write('*RST')
+                time.sleep(self._rst_delay)
+                self._write('*CLS') # Clear status
+                log.info(f"Instrument {self.resource_id} has been reset by '{self.name}'.")
+                
+                # Store the new handle and set initial ref_count
+                KeysightEDU33212A._active_connections[self.resource_id] = {
+                    "handle": self._instrument,
+                    "ref_count": 1
+                }
+                log.info(f"Connection for {self.resource_id} registered. Ref count: 1.")
+
             except visa.VisaIOError as e:
-                log.error(f"Error during disconnect: {e}")
-            finally:
                 self._instrument = None
+                log.error(f"Failed to connect '{self.name}' to {self.resource_id}: {e}")
+                raise ConnectionError(f"VISA I/O Error connecting to {self.resource_id}") from e
+        
+    def disconnect(self) -> None:
+        """
+        Disconnects the instance.
+        
+        If this is the last instance using the connection, the VISA
+        resource is safely closed. Otherwise, it just detaches this
+        instance.
+        """
+        if not self._instrument:
+            log.warning(f"Instance '{self.name}' already disconnected. Ignoring disconnect() call.")
+            return
+
+        # Acquire lock to ensure atomic disconnect/check operations
+        with KeysightEDU33212A._resource_lock:
+            # Check if the connection is managed by the class
+            shared_data = KeysightEDU33212A._active_connections.get(self.resource_id)
+
+            if not shared_data or shared_data["handle"] != self._instrument:
+                log.warning(f"Disconnecting '{self.name}' from an unmanaged or inconsistent resource. Forcing local disconnect.")
+                try:
+                    self._instrument.close()
+                except visa.VisaIOError as e:
+                    log.error(f"Error during forced disconnect for '{self.name}': {e}")
+                finally:
+                    self._instrument = None
+                return
+
+            # --- Managed Disconnect Path ---
+            
+            # Decrement reference count
+            shared_data["ref_count"] -= 1
+            log.info(f"Detaching instance '{self.name}'. Ref count for {self.resource_id} is now {shared_data['ref_count']}.")
+
+            if shared_data["ref_count"] == 0:
+                # --- Last Instance Path ---
+                log.info(f"Last instance '{self.name}' disconnecting. Closing VISA resource {self.resource_id}...")
+                try:
+                    # Turn off outputs as a safety measure
+                    self.set_output_state(1, OutputState.OFF)
+                    self.set_output_state(2, OutputState.OFF)
+                    self._instrument.clear()
+                    time.sleep(self._clr_delay)
+                    self._instrument.close()
+                    log.info(f"Resource {self.resource_id} closed successfully.")
+                except visa.VisaIOError as e:
+                    log.error(f"Error during final disconnect of {self.resource_id}: {e}")
+                finally:
+                    # Remove from active connections
+                    del KeysightEDU33212A._active_connections[self.resource_id]
+                    self._instrument = None
+            else:
+                # --- Subsequent Instance Path ---
+                # Not the last instance, just detach this instance
+                self._instrument = None
+                log.debug(f"Instance '{self.name}' detached. Resource {self.resource_id} remains open.")
 
     # --- Instrument Control (Implementation of Abstract Methods) ---
 
