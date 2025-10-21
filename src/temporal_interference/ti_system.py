@@ -52,7 +52,7 @@ class TISystem:
 
         # --- State Management ---
         self._state: TISystemState = TISystemState.IDLE
-        self._state_lock = threading.Lock()
+        self._state_lock = threading.RLock()
         self._ramp_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event() 
 
