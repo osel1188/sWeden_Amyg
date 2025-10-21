@@ -19,6 +19,11 @@ class WaveformShape(Enum):
     PULSE = 'PULS'
     ARBITRARY = 'ARB'
 
+class TriggerSource(Enum):
+    """Defines standard trigger sources."""
+    BUS = 'BUS'        # Software/Internal Trigger
+    EXTERNAL = 'EXT'   # External Hardware Trigger
+
 # ======================================================================================
 # Cohesive Abstract Base Class
 # ======================================================================================
@@ -59,6 +64,7 @@ class AbstractWaveformGenerator(ABC):
                 f"Already registered to {cls._driver_registry[model_id].__name__}."
             )
         cls._driver_registry[model_id] = cls
+        cls.model = model_id
         # print(f"Registered driver: {model_id} -> {cls.__name__}") # Optional: for debugging
         
 
@@ -123,7 +129,7 @@ class AbstractWaveformGenerator(ABC):
         """
         pass
 
-    # --- Low-Level Channel Configuration ---
+    # --- Low-Level Channel Configuration (Setters) ---
     @abstractmethod
     def set_output_state(self, channel: int, state: OutputState) -> None:
         """
@@ -176,6 +182,93 @@ class AbstractWaveformGenerator(ABC):
         Args:
             channel (int): The channel number.
             shape (WaveformShape): The desired waveform shape (e.g., SINE, SQUARE).
+        """
+        pass
+
+    # --- Low-Level Channel Configuration (Getters) ---
+    
+    @abstractmethod
+    def get_frequency(self, channel: int) -> float:
+        """
+        Queries the frequency of a specific channel.
+
+        Args:
+            channel (int): The channel number.
+        
+        Returns:
+            float: The frequency in Hertz (Hz).
+        """
+        pass
+
+    @abstractmethod
+    def get_amplitude(self, channel: int) -> float:
+        """
+        Queries the peak-to-peak voltage amplitude (Vpp) of a specific channel.
+
+        Args:
+            channel (int): The channel number.
+            
+        Returns:
+            float: The peak-to-peak voltage amplitude (Vpp).
+        """
+        pass
+
+    @abstractmethod
+    def get_offset(self, channel: int) -> float:
+        """
+        Queries the DC offset voltage of a specific channel.
+
+        Args:
+            channel (int): The channel number.
+            
+        Returns:
+            float: The DC offset in Volts (V).
+        """
+        pass
+
+    # --- High-Level and Utility Methods ---
+    
+    @abstractmethod
+    def initialize_device_settings(self, config: Dict[str, Any]) -> None:
+        """
+        Applies a dictionary of settings to the instrument.
+        
+        Args:
+            config (Dict[str, Any]): A configuration dictionary.
+        """
+        pass
+
+    @abstractmethod
+    def set_trigger_source_bus(self, channel: int) -> None:
+        """
+        Sets the trigger source to BUS (software/internal) for a specific channel.
+
+        Args:
+            channel (int): The channel number.
+        """
+        pass
+
+    @abstractmethod
+    def set_trigger_source_external(self, channel: int) -> None:
+        """
+        Sets the trigger source to EXT (external hardware trigger) for a specific channel.
+
+        Args:
+            channel (int): The channel number.
+        """
+        pass
+        
+    @abstractmethod
+    def trigger(self) -> None:
+        """
+        Sends a software trigger to the instrument.
+        """
+        pass
+
+    @abstractmethod
+    def abort(self) -> None:
+        """
+        Aborts the current waveform generation and returns to an idle state.
         """
         pass
 

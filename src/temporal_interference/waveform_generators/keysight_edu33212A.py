@@ -15,7 +15,8 @@ else:
 
 import time
 import logging
-import threading  # <-- Import threading for lock
+# MODIFICATION: Import RLock instead of Lock for re-entrant capability
+import threading
 from typing import Optional, Any, Dict, List
 
 from .waveform_generator import (
@@ -43,7 +44,9 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
     # --- Class-level shared resource management ---
     _rm = visa.ResourceManager()
     _active_connections: Dict[str, Dict[str, Any]] = {}
-    _resource_lock = threading.Lock()
+    # MODIFICATION: Use RLock to prevent deadlock when connect() calls
+    # initialize_device_settings(), as both acquire the lock.
+    _resource_lock = threading.RLock()
     # ----------------------------------------------
 
     def __init__(
@@ -52,7 +55,8 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         name: str = "",
         timeout: int = 10000,
         rst_delay: float = 1.0,
-        clr_delay: float = 0.1
+        clr_delay: float = 0.1,
+        **kwargs: Any 
     ) -> None:
         """
         Initializes the generator driver.
@@ -63,6 +67,10 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
             timeout (int): The VISA communication timeout in milliseconds.
             rst_delay (float): The delay in seconds after a reset command.
             clr_delay (float): The delay in seconds after a clear command.
+            **kwargs:
+                settings (Dict): Configuration dictionary for one-time initialization.
+                safety_limits (Dict): Dictionary of safety limits, e.g.,
+                                      {'max_amplitude_Vp': 5.0}.
         """
         super().__init__(resource_id)
         self.name = name or resource_id # Use resource_id if name is empty
@@ -71,7 +79,17 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         self._clr_delay = clr_delay
         self.channels: List[int] = []
         self._instrument: Optional[visa.Resource] = None
-        # self._rm is now a class variable, no need to init here.
+        
+        # The config dict for initialize_device_settings
+        self._settings: Optional[Dict[str, Any]] = kwargs.get('settings')
+        # Safety limits (e.g., {'max_amplitude_Vp': 5.0})
+        self._safety_limits: Dict[str, Any] = kwargs.get('safety_limits', {})
+        self._max_amplitude: Optional[float] = self._safety_limits.get('max_amplitude_vp')
+        
+        if self._max_amplitude is not None:
+            log.info(f"Safety limit for {self.resource_id}: Max amplitude set to {self._max_amplitude} Vp.")
+        # -----------------------------------------------------------------
+
         log.info(f"Driver for KeysightEDU33212A created for resource: {self.resource_id} (Name: '{self.name}')")
 
 
@@ -98,7 +116,8 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         Establishes connection to the device.
 
         If this is the first instance for this resource_id, it opens
-        the connection and resets the instrument.
+        the connection, resets the instrument, and applies initial settings
+        if they were provided during construction.
         If an existing connection is found, it attaches to it without
         resetting.
         """
@@ -145,9 +164,20 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                 # Store the new handle and set initial ref_count
                 KeysightEDU33212A._active_connections[self.resource_id] = {
                     "handle": self._instrument,
-                    "ref_count": 1
+                    "ref_count": 1,
+                    "initialized": False
                 }
                 log.info(f"Connection for {self.resource_id} registered. Ref count: 1.")
+
+                # --- MODIFICATION: Auto-initialize settings on first connect ---
+                if self._settings:
+                    log.info(f"First instance '{self.name}' applying initial settings...")
+                    # This call is thread-safe (due to RLock) and respects the
+                    # 'initialized' flag check within the method itself.
+                    self.initialize_device_settings(self._settings)
+                else:
+                    log.warning(f"First instance '{self.name}' connected, but no 'settings' were provided. Skipping one-time initialization.")
+                # --------------------------------------------------------------
 
             except visa.VisaIOError as e:
                 self._instrument = None
@@ -219,7 +249,17 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         self._write(f':SOURce{channel}:FREQuency {frequency:.4f}')
 
     def set_amplitude(self, channel: int, amplitude: float) -> None:
-        """Sets the peak-to-peak voltage amplitude (Vpp)."""
+        """Sets the peak-to-peak voltage amplitude (Vp)."""
+        # --- MODIFICATION: Safety Limit Check ---
+        if self._max_amplitude is not None and amplitude > self._max_amplitude:
+            err_msg = (
+                f"SAFETY LIMIT VIOLATION for {self.resource_id}: "
+                f"Attempted to set amplitude to {amplitude:.4f} Vp, "
+                f"which exceeds the limit of {self._max_amplitude:.4f} Vp."
+            )
+            log.error(err_msg)
+            raise ValueError(err_msg)
+        # ----------------------------------------
         self._write(f':SOURce{channel}:VOLTage {amplitude:.4f}')
 
     def set_offset(self, channel: int, offset: float) -> None:
@@ -240,7 +280,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         return float(self._query(f":SOURce{channel}:FREQuency?"))
 
     def get_amplitude(self, channel: int) -> float:
-        """Queries the peak-to-peak voltage amplitude (Vpp) of a specific channel."""
+        """Queries the peak-to-peak voltage amplitude (Vp) of a specific channel."""
         return float(self._query(f":SOURce{channel}:VOLTage?"))
 
     def get_offset(self, channel: int) -> float:
@@ -251,22 +291,70 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
 
     def apply_sinusoid(self, channel: int, frequency: float, amplitude: float, offset: float = 0.0) -> None:
         """Configures the source to output a sinusoid with specified parameters."""
+        # --- MODIFICATION: Safety Limit Check ---
+        if self._max_amplitude is not None and amplitude > self._max_amplitude:
+            err_msg = (
+                f"SAFETY LIMIT VIOLATION for {self.resource_id}: "
+                f"Attempted to apply sinusoid with amplitude {amplitude:.4f} Vp, "
+                f"which exceeds the limit of {self._max_amplitude:.4f} Vp."
+            )
+            log.error(err_msg)
+            raise ValueError(err_msg)
+        # ----------------------------------------
+        
         # Using a single APPLY command is often more efficient on the instrument side.
         self._write(f':SOURce{channel}:APPLy:SINusoid {frequency},{amplitude:.4f},{offset:.4f}')
-        log.info(f"Applied Sinusoid to Ch{channel}: {frequency} Hz, {amplitude:.4f} Vpp, {offset:.4f} V")
+        log.info(f"Applied Sinusoid to Ch{channel}: {frequency} Hz, {amplitude:.4f} Vp, {offset:.4f} V")
 
     def initialize_device_settings(self, config: Dict[str, Any]) -> None:
-        """Applies a dictionary of default settings to the instrument."""
-        log.info(f"Setting up defaults for {self.name}...")
-        self.channels = config.get('source_channels', [1, 2])
-        for ch in self.channels:
-            self.set_output_state(ch, OutputState.OFF)
-            self._write(f":OUTPut{ch}:LOAD {config.get('load_impedance', 'INFinity')}")
-            self._write(f":SOURce{ch}:FUNCtion {config.get('function', 'SIN')}")
-            self._write(f":SOURce{ch}:BURSt:STATe {1 if config.get('burst_state', True) else 0}")
-            self._write(f":SOURce{ch}:BURSt:NCYCles {config.get('burst_num_cycles', 'INF')}")
-            self._write(f":SOURce{ch}:BURSt:MODE {config.get('burst_mode', 'TRIG')}")
-            log.debug(f"Defaults applied to channel {ch} for {self.name}.")
+        """
+        Applies a dictionary of default settings to the instrument.
+        
+        This operation is thread-safe and will only be executed *once*
+        per active connection session (i.e., by the first instance
+        that calls it, or automatically on first connect).
+        """
+        if self._instrument is None:
+            raise ConnectionError("Instrument not connected. Cannot initialize settings.")
+            
+        if not config:
+            log.warning(f"Initialization skipped for {self.resource_id}: No configuration provided.")
+            return
+
+        # Acquire lock to ensure atomic check/set of the initialized flag
+        with KeysightEDU33212A._resource_lock:
+            shared_data = KeysightEDU33212A._active_connections.get(self.resource_id)
+
+            if not shared_data or shared_data["handle"] != self._instrument:
+                log.warning(f"Cannot initialize settings: No managed connection found for {self.resource_id}.")
+                return
+
+            if shared_data["initialized"]:
+                log.warning(f"Settings for {self.resource_id} have already been initialized. Skipping.")
+                return
+            
+            # --- Proceed with Initialization ---
+            log.info(f"Applying one-time initial settings for {self.resource_id} (by instance '{self.name}')...")
+            try:
+                self.channels = config.get('source_channels', [1, 2])
+                for ch in self.channels:
+                    self.set_output_state(ch, OutputState.OFF)
+                    self._write(f":OUTPut{ch}:LOAD {config.get('load_impedance', 'INFinity')}")
+                    self.set_waveform_shape(ch, WaveformShape(config.get('function', 'SIN').upper()))
+                    self._write(f":SOURce{ch}:FUNCtion {config.get('function', 'SIN')}")
+                    self._write(f":SOURce{ch}:BURSt:STATe {1 if config.get('burst_state', True) else 0}")
+                    self._write(f":SOURce{ch}:BURSt:NCYCles {config.get('burst_num_cycles', 'INF')}")
+                    self._write(f":SOURce{ch}:BURSt:MODE {config.get('burst_mode', 'TRIG')}")
+                    log.debug(f"Defaults applied to channel {ch} for {self.name}.")
+                
+                # --- Set flag AFTER successful initialization ---
+                shared_data["initialized"] = True
+                log.info(f"One-time initialization complete for {self.resource_id}.")
+
+            except visa.VisaIOError as e:
+                log.error(f"Failed to apply settings for {self.resource_id}: {e}")
+                # Do not set initialized = True if it failed
+                raise ConnectionError(f"VISA I/O Error during settings initialization for {self.resource_id}") from e
 
     def set_trigger_source_bus(self) -> None:
         """Sets the trigger source to BUS (software/internal)."""
@@ -348,7 +436,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                     "output_state": self.get_output_state(ch).value,
                     "waveform": self._query(f":SOURce{ch}:FUNCtion?"),
                     "frequency_hz": self.get_frequency(ch),
-                    "amplitude_vpp": self.get_amplitude(ch),
+                    "amplitude_Vp": self.get_amplitude(ch),
                     "offset_v": self.get_offset(ch),
                 }
                 status[f'channel_{ch}'] = ch_status
