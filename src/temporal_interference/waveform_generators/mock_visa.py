@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Dict, Any, Optional
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # --- Mock VISA Exception ---
 class VisaIOError(IOError):
@@ -40,15 +40,15 @@ class MockResource:
             1: get_default_state(),
             2: get_default_state(),
         }
-        log.info(f"MockResource created for {self.resource_id}")
+        logger.info(f"MockResource created for {self.resource_id}")
 
     # --- Connection Methods (Mocked) ---
     def clear(self) -> None:
-        log.debug(f"MockResource.clear() called")
+        logger.debug(f"MockResource.clear() called")
         pass # No operation
 
     def close(self) -> None:
-        log.debug(f"MockResource.close() called")
+        logger.debug(f"MockResource.close() called")
         pass # No operation
 
     @property
@@ -57,7 +57,7 @@ class MockResource:
 
     @timeout.setter
     def timeout(self, value: int) -> None:
-        log.debug(f"MockResource.timeout set to {value}")
+        logger.debug(f"MockResource.timeout set to {value}")
         self._timeout = value
 
     # --- Core SCPI Simulation ---
@@ -67,7 +67,7 @@ class MockResource:
 Setting to a mock (Fake) implementation of the Keysight generator for testing.
         This method parses SCPI "set" commands and updates the internal state.
         """
-        log.debug(f"MOCK WRITE: {command}")
+        logger.debug(f"MOCK WRITE: {command}")
         
         # --- System Commands ---
         if command == '*RST':
@@ -122,14 +122,14 @@ Setting to a mock (Fake) implementation of the Keysight generator for testing.
         # Add regex for other 'write' commands here...
         # e.g., :OUTPut[ch]:LOAD, :SOURce[ch]:BURSt:STATe, etc.
 
-        log.warning(f"Unhandled MOCK WRITE command: {command}")
+        logger.warning(f"Unhandled MOCK WRITE command: {command}")
 
     def query(self, command: str) -> str:
         """
         Simulates SCPI "query" commands.
         This method parses SCPI queries and returns a string from the internal state.
         """
-        log.debug(f"MOCK QUERY: {command}")
+        logger.debug(f"MOCK QUERY: {command}")
         
         # --- System Queries ---
         if command == '*IDN?':
@@ -165,7 +165,7 @@ Setting to a mock (Fake) implementation of the Keysight generator for testing.
 
         # Add regex for other 'query' commands here...
 
-        log.error(f"Unhandled MOCK QUERY command: {command}")
+        logger.error(f"Unhandled MOCK QUERY command: {command}")
         raise VisaIOError(f"Unhandled mock query: {command}")
 
 
@@ -175,7 +175,7 @@ class MockResourceManager:
     Simulates the pyvisa.ResourceManager.
     """
     def __init__(self, *args, **kwargs):
-        log.info("MockResourceManager initialized")
+        logger.info("MockResourceManager initialized")
         self._resources: Dict[str, MockResource] = {}
 
     def open_resource(self, resource_id: str, *args, **kwargs) -> MockResource:
@@ -185,7 +185,7 @@ class MockResourceManager:
         if resource_id not in self._resources:
             self._resources[resource_id] = MockResource(resource_id)
         
-        log.info(f"MockResourceManager.open_resource({resource_id})")
+        logger.info(f"MockResourceManager.open_resource({resource_id})")
         return self._resources[resource_id]
 
 # --- Public API of the mock module ---

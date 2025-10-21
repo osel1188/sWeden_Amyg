@@ -10,7 +10,7 @@ from .waveform_generator import AbstractWaveformGenerator, WaveformShape
 # This import statement is what triggers the __init_subclass__ registration.
 from .keysight_edu33212A import KeysightEDU33212A 
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 def create_waveform_generator(
     model: str, 
@@ -29,16 +29,16 @@ def create_waveform_generator(
     Returns:
         AbstractWaveformGenerator: An initialized instance of the correct concrete driver.
     """
-    log.info(f"Attempting to create generator for model: '{model}' at {resource_id}")
+    logger.info(f"Attempting to create generator for model: '{model}' at {resource_id}")
     
     # 1. Get the correct class from the registry
     try:
         driver_class = AbstractWaveformGenerator.get_driver_class(model)
     except ValueError as e:
-        log.error(f"Factory creation failed: {e}")
+        logger.error(f"Factory creation failed: {e}")
         raise
         
-    log.info(f"Found driver class: {driver_class.__name__}")
+    logger.info(f"Found driver class: {driver_class.__name__}")
 
     # 2. Create and return an instance of that class
     # The resource_id is passed, along with any other driver-specific settings

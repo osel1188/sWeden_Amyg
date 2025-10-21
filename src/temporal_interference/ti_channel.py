@@ -10,6 +10,9 @@ from .waveform_generators.waveform_generator import (
     OutputState
 )
 
+# --- Define the module-level logger ---
+logger = logging.getLogger(__name__)
+
 # This class now encapsulates its own hardware lock
 # to protect I/O operations and internal state.
 class TIChannel:
@@ -64,7 +67,7 @@ class TIChannel:
         Thread-safe.
         """
         with self._hw_lock:
-            logging.debug(f"CH{self.wavegen_channel} ({self._region}): Applying config. Freq={self.target_frequency} Hz.")
+            logger.debug(f"CH{self.wavegen_channel} ({self._region}): Applying config. Freq={self.target_frequency} Hz.")
             self.generator.set_waveform_shape(self.wavegen_channel, WaveformShape.SINE)
             self.generator.set_frequency(self.wavegen_channel, self.target_frequency)
             self.generator.set_offset(self.wavegen_channel, 0.0)
@@ -72,7 +75,7 @@ class TIChannel:
     def set_output_state(self, state: OutputState) -> None:
         """Sets the output state (ON/OFF) for this channel. Thread-safe."""
         with self._hw_lock:
-            logging.debug(f"CH{self.wavegen_channel} ({self._region}): Setting output state to {state.name}.")
+            logger.debug(f"CH{self.wavegen_channel} ({self._region}): Setting output state to {state.name}.")
             self.generator.set_output_state(self.wavegen_channel, state)
     
     def _set_amplitude_unsafe(self, voltage: float) -> None:
@@ -103,7 +106,7 @@ class TIChannel:
         Thread-safe.
         """
         with self._hw_lock:
-            logging.warning(f"CH{self.wavegen_channel} ({self._region}): Immediate stop.")
+            logger.warning(f"CH{self.wavegen_channel} ({self._region}): Immediate stop.")
             self.generator.set_amplitude(self.wavegen_channel, 0.0)
             self.generator.set_output_state(self.wavegen_channel, OutputState.OFF)
             self._current_voltage = 0.0

@@ -26,7 +26,7 @@ from .waveform_generator import (
 )
 
 # Setup a standard logger. The application, not the driver, decides where logs go.
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A"):
     """
@@ -87,10 +87,10 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         self._max_amplitude: Optional[float] = self._safety_limits.get('max_amplitude_vp')
         
         if self._max_amplitude is not None:
-            log.info(f"Safety limit for {self.resource_id}: Max amplitude set to {self._max_amplitude} Vp.")
+            logger.info(f"Safety limit for {self.resource_id}: Max amplitude set to {self._max_amplitude} Vp.")
         # -----------------------------------------------------------------
 
-        log.info(f"Driver for KeysightEDU33212A created for resource: {self.resource_id} (Name: '{self.name}')")
+        logger.info(f"Driver for KeysightEDU33212A created for resource: {self.resource_id} (Name: '{self.name}')")
 
 
     # --- Low-level Communication ---
@@ -99,14 +99,14 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         """Sends a command to the instrument."""
         if self._instrument is None:
             raise ConnectionError("Instrument not connected. Cannot write command.")
-        log.debug(f"WRITE to {self.resource_id}: {command}")
+        logger.debug(f"WRITE to {self.resource_id}: {command}")
         self._instrument.write(command)
 
     def _query(self, command: str) -> str:
         """Sends a query to the instrument and returns the response."""
         if self._instrument is None:
             raise ConnectionError("Instrument not connected. Cannot send query.")
-        log.debug(f"QUERY to {self.resource_id}: {command}")
+        logger.debug(f"QUERY to {self.resource_id}: {command}")
         return self._instrument.query(command).strip()
 
     # --- Connection Management (Implementation of Abstract Methods) ---
@@ -122,7 +122,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         resetting.
         """
         if self._instrument:
-            log.warning(f"Instance '{self.name}' already connected. Ignoring connect() call.")
+            logger.warning(f"Instance '{self.name}' already connected. Ignoring connect() call.")
             return
 
         # Acquire lock to ensure atomic connect/check operations
@@ -130,7 +130,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
             # Check if another instance has already connected to this resource
             if self.resource_id in KeysightEDU33212A._active_connections:
                 # --- Subsequent Instance Path ---
-                log.info(f"Attaching '{self.name}' to existing connection for {self.resource_id}.")
+                logger.info(f"Attaching '{self.name}' to existing connection for {self.resource_id}.")
                 shared_data = KeysightEDU33212A._active_connections[self.resource_id]
                 
                 # Assign the shared handle to this instance
@@ -139,13 +139,13 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                 # Increment the reference count
                 shared_data["ref_count"] += 1
                 
-                log.info(f"Attached. Ref count for {self.resource_id} is now {shared_data['ref_count']}.")
+                logger.info(f"Attached. Ref count for {self.resource_id} is now {shared_data['ref_count']}.")
                 # Skip reset, clear, and IDN query as it was done by the first instance
                 return
             
             # --- First Instance Path ---
             try:
-                log.info(f"First instance '{self.name}' connecting to {self.resource_id}. Performing full setup...")
+                logger.info(f"First instance '{self.name}' connecting to {self.resource_id}. Performing full setup...")
                 
                 # Use the class-level resource manager
                 self._instrument = KeysightEDU33212A._rm.open_resource(self.resource_id)
@@ -154,12 +154,12 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                 time.sleep(self._clr_delay)
 
                 identity = self._query("*IDN?")
-                log.info(f"Successfully connected to: {identity}")
+                logger.info(f"Successfully connected to: {identity}")
 
                 self._write('*RST')
                 time.sleep(self._rst_delay)
                 self._write('*CLS') # Clear status
-                log.info(f"Instrument {self.resource_id} has been reset by '{self.name}'.")
+                logger.info(f"Instrument {self.resource_id} has been reset by '{self.name}'.")
                 
                 # Store the new handle and set initial ref_count
                 KeysightEDU33212A._active_connections[self.resource_id] = {
@@ -167,21 +167,21 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                     "ref_count": 1,
                     "initialized": False
                 }
-                log.info(f"Connection for {self.resource_id} registered. Ref count: 1.")
+                logger.info(f"Connection for {self.resource_id} registered. Ref count: 1.")
 
                 # --- MODIFICATION: Auto-initialize settings on first connect ---
                 if self._settings:
-                    log.info(f"First instance '{self.name}' applying initial settings...")
+                    logger.info(f"First instance '{self.name}' applying initial settings...")
                     # This call is thread-safe (due to RLock) and respects the
                     # 'initialized' flag check within the method itself.
                     self.initialize_device_settings(self._settings)
                 else:
-                    log.warning(f"First instance '{self.name}' connected, but no 'settings' were provided. Skipping one-time initialization.")
+                    logger.warning(f"First instance '{self.name}' connected, but no 'settings' were provided. Skipping one-time initialization.")
                 # --------------------------------------------------------------
 
             except visa.VisaIOError as e:
                 self._instrument = None
-                log.error(f"Failed to connect '{self.name}' to {self.resource_id}: {e}")
+                logger.error(f"Failed to connect '{self.name}' to {self.resource_id}: {e}")
                 raise ConnectionError(f"VISA I/O Error connecting to {self.resource_id}") from e
         
     def disconnect(self) -> None:
@@ -193,7 +193,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         instance.
         """
         if not self._instrument:
-            log.warning(f"Instance '{self.name}' already disconnected. Ignoring disconnect() call.")
+            logger.warning(f"Instance '{self.name}' already disconnected. Ignoring disconnect() call.")
             return
 
         # Acquire lock to ensure atomic disconnect/check operations
@@ -202,11 +202,11 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
             shared_data = KeysightEDU33212A._active_connections.get(self.resource_id)
 
             if not shared_data or shared_data["handle"] != self._instrument:
-                log.warning(f"Disconnecting '{self.name}' from an unmanaged or inconsistent resource. Forcing local disconnect.")
+                logger.warning(f"Disconnecting '{self.name}' from an unmanaged or inconsistent resource. Forcing local disconnect.")
                 try:
                     self._instrument.close()
                 except visa.VisaIOError as e:
-                    log.error(f"Error during forced disconnect for '{self.name}': {e}")
+                    logger.error(f"Error during forced disconnect for '{self.name}': {e}")
                 finally:
                     self._instrument = None
                 return
@@ -215,11 +215,11 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
             
             # Decrement reference count
             shared_data["ref_count"] -= 1
-            log.info(f"Detaching instance '{self.name}'. Ref count for {self.resource_id} is now {shared_data['ref_count']}.")
+            logger.info(f"Detaching instance '{self.name}'. Ref count for {self.resource_id} is now {shared_data['ref_count']}.")
 
             if shared_data["ref_count"] == 0:
                 # --- Last Instance Path ---
-                log.info(f"Last instance '{self.name}' disconnecting. Closing VISA resource {self.resource_id}...")
+                logger.info(f"Last instance '{self.name}' disconnecting. Closing VISA resource {self.resource_id}...")
                 try:
                     # Turn off outputs as a safety measure
                     self.set_output_state(1, OutputState.OFF)
@@ -227,9 +227,9 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                     self._instrument.clear()
                     time.sleep(self._clr_delay)
                     self._instrument.close()
-                    log.info(f"Resource {self.resource_id} closed successfully.")
+                    logger.info(f"Resource {self.resource_id} closed successfully.")
                 except visa.VisaIOError as e:
-                    log.error(f"Error during final disconnect of {self.resource_id}: {e}")
+                    logger.error(f"Error during final disconnect of {self.resource_id}: {e}")
                 finally:
                     # Remove from active connections
                     del KeysightEDU33212A._active_connections[self.resource_id]
@@ -238,7 +238,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                 # --- Subsequent Instance Path ---
                 # Not the last instance, just detach this instance
                 self._instrument = None
-                log.debug(f"Instance '{self.name}' detached. Resource {self.resource_id} remains open.")
+                logger.debug(f"Instance '{self.name}' detached. Resource {self.resource_id} remains open.")
 
     # --- Instrument Control (Implementation of Abstract Methods) ---
 
@@ -257,7 +257,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                 f"Attempted to set amplitude to {amplitude:.4f} Vp, "
                 f"which exceeds the limit of {self._max_amplitude:.4f} Vp."
             )
-            log.error(err_msg)
+            logger.error(err_msg)
             raise ValueError(err_msg)
         # ----------------------------------------
         self._write(f':SOURce{channel}:VOLTage {amplitude:.4f}')
@@ -298,13 +298,13 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                 f"Attempted to apply sinusoid with amplitude {amplitude:.4f} Vp, "
                 f"which exceeds the limit of {self._max_amplitude:.4f} Vp."
             )
-            log.error(err_msg)
+            logger.error(err_msg)
             raise ValueError(err_msg)
         # ----------------------------------------
         
         # Using a single APPLY command is often more efficient on the instrument side.
         self._write(f':SOURce{channel}:APPLy:SINusoid {frequency},{amplitude:.4f},{offset:.4f}')
-        log.info(f"Applied Sinusoid to Ch{channel}: {frequency} Hz, {amplitude:.4f} Vp, {offset:.4f} V")
+        logger.info(f"Applied Sinusoid to Ch{channel}: {frequency} Hz, {amplitude:.4f} Vp, {offset:.4f} V")
 
     def initialize_device_settings(self, config: Dict[str, Any]) -> None:
         """
@@ -318,7 +318,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
             raise ConnectionError("Instrument not connected. Cannot initialize settings.")
             
         if not config:
-            log.warning(f"Initialization skipped for {self.resource_id}: No configuration provided.")
+            logger.warning(f"Initialization skipped for {self.resource_id}: No configuration provided.")
             return
 
         # Acquire lock to ensure atomic check/set of the initialized flag
@@ -326,15 +326,15 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
             shared_data = KeysightEDU33212A._active_connections.get(self.resource_id)
 
             if not shared_data or shared_data["handle"] != self._instrument:
-                log.warning(f"Cannot initialize settings: No managed connection found for {self.resource_id}.")
+                logger.warning(f"Cannot initialize settings: No managed connection found for {self.resource_id}.")
                 return
 
             if shared_data["initialized"]:
-                log.warning(f"Settings for {self.resource_id} have already been initialized. Skipping.")
+                logger.warning(f"Settings for {self.resource_id} have already been initialized. Skipping.")
                 return
             
             # --- Proceed with Initialization ---
-            log.info(f"Applying one-time initial settings for {self.resource_id} (by instance '{self.name}')...")
+            logger.info(f"Applying one-time initial settings for {self.resource_id} (by instance '{self.name}')...")
             try:
                 self.channels = config.get('source_channels', [1, 2])
                 for ch in self.channels:
@@ -345,14 +345,14 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                     self._write(f":SOURce{ch}:BURSt:STATe {1 if config.get('burst_state', True) else 0}")
                     self._write(f":SOURce{ch}:BURSt:NCYCles {config.get('burst_num_cycles', 'INF')}")
                     self._write(f":SOURce{ch}:BURSt:MODE {config.get('burst_mode', 'TRIG')}")
-                    log.debug(f"Defaults applied to channel {ch} for {self.name}.")
+                    logger.debug(f"Defaults applied to channel {ch} for {self.name}.")
                 
                 # --- Set flag AFTER successful initialization ---
                 shared_data["initialized"] = True
-                log.info(f"One-time initialization complete for {self.resource_id}.")
+                logger.info(f"One-time initialization complete for {self.resource_id}.")
 
             except visa.VisaIOError as e:
-                log.error(f"Failed to apply settings for {self.resource_id}: {e}")
+                logger.error(f"Failed to apply settings for {self.resource_id}: {e}")
                 # Do not set initialized = True if it failed
                 raise ConnectionError(f"VISA I/O Error during settings initialization for {self.resource_id}") from e
 
@@ -360,14 +360,14 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         """Sets the trigger source to BUS (software/internal)."""
         for ch in self.channels:
             self._write(f':TRIGger{ch}:SOURce BUS')
-            log.debug(f"Device '{self.name}': Channel {ch} trigger source set to BUS")
+            logger.debug(f"Device '{self.name}': Channel {ch} trigger source set to BUS")
         self.enable_output_trigger()
     
     def set_trigger_source_external(self) -> None:
         """Sets the trigger source to EXT (external hardware trigger)."""
         for ch in self.channels:
             self._write(f':TRIGger{ch}:SOURce EXT')
-            log.debug(f"Device '{self.name}': Channel {ch} trigger source set to EXT")
+            logger.debug(f"Device '{self.name}': Channel {ch} trigger source set to EXT")
         self.enable_output_trigger()
     
     def set_output_trigger(self, state: str) -> None:
@@ -388,7 +388,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         
         for ch in self.channels:
             self._write(f':OUTPut{ch}:TRIGger:STATe {norm_state}')
-            log.debug(f"Device '{self.name}': Channel {ch} {log_msg} for output trigger.")
+            logger.debug(f"Device '{self.name}': Channel {ch} {log_msg} for output trigger.")
 
     def enable_output_trigger(self) -> None:
         self.set_output_trigger('ON')
@@ -401,12 +401,12 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         Sends a software trigger (*TRG). 
         It will work only if the device is set to source bus trigger.
         """
-        log.info(f"Sending software trigger to {self.name}.")
+        logger.info(f"Sending software trigger to {self.name}.")
         self._write('*TRG')
 
     def abort(self) -> None:
         """Aborts the current waveform generation."""
-        log.info(f"Sending abort command to {self.name}.")
+        logger.info(f"Sending abort command to {self.name}.")
         self._write(':ABORt')
 
     def beep(self) -> None:
@@ -419,7 +419,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
             self._query("*OPC?")
             return True
         except visa.VisaIOError as e:
-            log.warning(f"Error during *OPC? query for {self.name}: {e}")
+            logger.warning(f"Error during *OPC? query for {self.name}: {e}")
             return False
 
     # --- Instrument Status ---

@@ -11,6 +11,9 @@ from .electrode import Electrode, ElectrodePair
 from .ti_channel import TIChannel
 from .ti_system import TISystem
 
+# --- Define the module-level logger ---
+logger = logging.getLogger(__name__)
+
 class TIConfig:
     """
     Manages the temporal interference (TI) stimulation configuration.
@@ -126,26 +129,26 @@ class TIConfig:
         try:
             with open(config_path, 'r') as f:
                 config: Dict = json.load(f)
-            logging.info(f"Configuration loaded successfully from {config_path}")
+            logger.info(f"Configuration loaded successfully from {config_path}")
             
             # Content Management (Validation): Checks schema, types, and presence.
             self._validate_config(config)
-            logging.info("Configuration validation successful.")
+            logger.info("Configuration validation successful.")
             
             return config
         
         except FileNotFoundError:
-            logging.error(f"Configuration file not found: {config_path}")
+            logger.error(f"Configuration file not found: {config_path}")
             return None
         except json.JSONDecodeError as e:
-            logging.error(f"Error decoding JSON configuration file {config_path}: {e}")
+            logger.error(f"Error decoding JSON configuration file {config_path}: {e}")
             return None
         except ValueError as e:
             # This catches failures from _validate_config
-            logging.error(f"Configuration validation failed: {e}")
+            logger.error(f"Configuration validation failed: {e}")
             return None
         except Exception as e:
-            logging.error(f"An unexpected error occurred loading config {config_path}: {e}")
+            logger.error(f"An unexpected error occurred loading config {config_path}: {e}")
             return None
 
     def get_protocols(self) -> Dict[str, Any]:
@@ -203,9 +206,9 @@ class TIConfig:
                     preset_config = copy.deepcopy(wg_config_data.get(preset_name))
                     
                     if not preset_config:
-                        logging.warning(f"Preset '{preset_name}' for generator '{generator_id}' not found. Settings will be None.")
+                        logger.warning(f"Preset '{preset_name}' for generator '{generator_id}' not found. Settings will be None.")
                 else:
-                    logging.warning(f"No preset assignment found for generator '{generator_id}'. Settings will be None.")
+                    logger.warning(f"No preset assignment found for generator '{generator_id}'. Settings will be None.")
 
                 # Assemble the complete configuration data required for initialization
                 output_configs[generator_id] = {
@@ -215,7 +218,7 @@ class TIConfig:
                 }
             
             except KeyError as e:
-                logging.error(f"Missing key {e} in 'waveform_generators' entry: {generator_data}. Skipping this generator config.")
+                logger.error(f"Missing key {e} in 'waveform_generators' entry: {generator_data}. Skipping this generator config.")
                 continue
 
         return output_configs
@@ -244,7 +247,7 @@ class TIConfig:
         try:
             safety_limits = copy.deepcopy(self.config['waveform_generator_config']['safety_limits'])
         except KeyError:
-            logging.error("Missing 'safety_limits' in 'waveform_generator_config'.")
+            logger.error("Missing 'safety_limits' in 'waveform_generator_config'.")
             raise ValueError("Configuration missing 'safety_limits'.")
 
         # 3. Iterate and instantiate
@@ -257,7 +260,7 @@ class TIConfig:
                     "safety_limits": safety_limits         # The global safety dict
                 }
                 
-                logging.info(f"Initializing waveform generator: ID='{gen_id}', Model='{gen_config['model']}', Resource='{gen_config['resource_id']}'")
+                logger.info(f"Initializing waveform generator: ID='{gen_id}', Model='{gen_config['model']}', Resource='{gen_config['resource_id']}'")
                 
                 # 4. Call the factory function from __init__.py
                 wg_instance = create_waveform_generator(
@@ -268,7 +271,7 @@ class TIConfig:
                 initialized_generators[gen_id] = wg_instance
             
             except Exception as e:
-                logging.error(f"Failed to initialize waveform generator '{gen_id}' ({gen_config['model']}): {e}", exc_info=True)
+                logger.error(f"Failed to initialize waveform generator '{gen_id}' ({gen_config['model']}): {e}", exc_info=True)
                 # Fail-fast: If hardware can't be initialized, the system cannot run.
                 raise ValueError(f"Failed to initialize generator '{gen_id}': {e}")
 
@@ -387,7 +390,7 @@ class TIConfig:
                 )
                 systems_dict[system_key] = ti_system
             except TypeError as e:
-                logging.error(f"Failed to instantiate TISystem: {e}. Did you modify TISystem.__init__ to accept channel_1 and channel_2?")
+                logger.error(f"Failed to instantiate TISystem: {e}. Did you modify TISystem.__init__ to accept channel_1 and channel_2?")
                 raise TypeError(f"TISystem constructor mismatch. See log. (Original error: {e})")
         
         return systems_dict

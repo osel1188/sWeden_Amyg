@@ -18,6 +18,8 @@ from .waveform_generators.waveform_generator import (
     OutputState
 )
 
+# --- Define the module-level logger ---
+logger = logging.getLogger(__name__)
 
 # --- TISystemState Enum ---
 class TISystemState(Enum):
@@ -64,7 +66,7 @@ class TISystem:
     def _default_status_update(self, message: str, level: str):
         """Default status handler if none is provided."""
         log_level = getattr(logging, level.upper(), logging.INFO)
-        logging.log(log_level, f"TISystem ({self.region}): {message}")
+        logger.log(log_level, f"TISystem ({self.region}): {message}")
 
     def _default_progress_update(self, region_name: str, progress: float):
         """Default progress handler (console spinner) if none is provided."""
@@ -110,7 +112,7 @@ class TISystem:
         for key in data:
             if key not in self.channels:
                 self._status_update_func(f"Invalid channel key '{key}' for {operation}.", "error")
-                logging.error(f"Invalid channel key '{key}' for {operation}. Available: {list(self.channels.keys())}")
+                logger.error(f"Invalid channel key '{key}' for {operation}. Available: {list(self.channels.keys())}")
                 return False
         return True
 
@@ -123,7 +125,7 @@ class TISystem:
         for key, volt in voltages.items():
             self.channels[key].setup_target_voltage(volt)
             log_msgs.append(f"{key}={volt} V")
-        logging.info(f"Region {self.region} target voltages set to: {', '.join(log_msgs)}.")
+        logger.info(f"Region {self.region} target voltages set to: {', '.join(log_msgs)}.")
 
     def setup_frequencies(self, frequencies: Dict[str, float]) -> None:
         """Sets the frequency for one or more specified channels."""
@@ -134,7 +136,7 @@ class TISystem:
         for key, freq in frequencies.items():
             self.channels[key].setup_frequency(freq)
             log_msgs.append(f"{key}={freq} Hz")
-        logging.info(f"Region {self.region} frequencies set to: {', '.join(log_msgs)}.")
+        logger.info(f"Region {self.region} frequencies set to: {', '.join(log_msgs)}.")
 
     def setup_ramp_durations(self, durations: Dict[str, float]) -> None:
         """Sets the ramp duration for one or more specified channels."""
@@ -145,11 +147,11 @@ class TISystem:
         for key, dur in durations.items():
             self.channels[key].setup_ramp_duration(dur)
             log_msgs.append(f"{key}={dur}s")
-        logging.info(f"Region {self.region} ramp durations set to: {', '.join(log_msgs)}.")
+        logger.info(f"Region {self.region} ramp durations set to: {', '.join(log_msgs)}.")
 
     def setup_ramp_duration(self, duration_s: float) -> None:
         """Sets the same ramp duration for *all* channels."""
-        logging.warning("setup_ramp_duration(s) is deprecated. Use setup_ramp_durations(dict) for per-channel control.")
+        logger.warning("setup_ramp_duration(s) is deprecated. Use setup_ramp_durations(dict) for per-channel control.")
         all_channel_durations = {key: duration_s for key in self.channels}
         self.setup_ramp_durations(all_channel_durations)
     
@@ -207,7 +209,7 @@ class TISystem:
                     
         except Exception as e:
             error_msg = f"Failed to start TISystem {self.region}: {e}"
-            logging.error(error_msg, exc_info=True)
+            logger.error(error_msg, exc_info=True)
             self._status_update_func(f"Error starting {self.region}: {e}", "error")
             with self._state_lock:
                 self._state = TISystemState.ERROR
@@ -270,7 +272,7 @@ class TISystem:
                         self._state = TISystemState.IDLE
                 
         except Exception as e:
-            logging.error(f"Failed to turn off outputs for {self.region}: {e}", exc_info=True)
+            logger.error(f"Failed to turn off outputs for {self.region}: {e}", exc_info=True)
             self._status_update_func(f"Error stopping {self.region}: {e}", "error")
             with self._state_lock:
                 self._state = TISystemState.ERROR
@@ -291,12 +293,12 @@ class TISystem:
         """
         if channel_key not in self.channels:
             self._status_update_func(f"Invalid channel key '{channel_key}'.", "error")
-            logging.error(f"ramp_channel_voltage: Invalid channel key {channel_key}.")
+            logger.error(f"ramp_channel_voltage: Invalid channel key {channel_key}.")
             return
             
         if rate_v_per_s <= 0:
             self._status_update_func(f"Ramp rate must be positive, not {rate_v_per_s} V/s.", "error")
-            logging.error(f"ramp_channel_voltage: Invalid rate {rate_v_per_s}.")
+            logger.error(f"ramp_channel_voltage: Invalid rate {rate_v_per_s}.")
             return
 
         with self._state_lock:
@@ -391,7 +393,7 @@ class TISystem:
                     
         except Exception as e:
             error_msg = f"Failed to ramp channel {channel_key} for TISystem {self.region}: {e}"
-            logging.error(error_msg, exc_info=True)
+            logger.error(error_msg, exc_info=True)
             self._status_update_func(f"Error ramping {channel_key} ({self.region}): {e}", "error")
             with self._state_lock:
                 self._state = TISystemState.ERROR
@@ -413,13 +415,13 @@ class TISystem:
             self._state = TISystemState.ERROR
         
         self._status_update_func(f"EMERGENCY STOP triggered for {self.region}", "error")
-        logging.warning(f"EMERGENCY STOP triggered for {self.region}")
+        logger.warning(f"EMERGENCY STOP triggered for {self.region}")
         
         try:
             for channel in self.channels.values():
                 channel.immediate_stop()
         except Exception as e:
-            logging.error(f"Error during emergency stop for {self.region}: {e}", exc_info=True)
+            logger.error(f"Error during emergency stop for {self.region}: {e}", exc_info=True)
             self._status_update_func(f"Critical error during e-stop {self.region}: {e}", "error")
 
     # --- MODIFIED: _calculate_trajectories is N-channel aware ---
@@ -480,17 +482,17 @@ class TISystem:
                                                           duration_secs)
         
         if num_steps_total == 0:
-            logging.warning(f"Ramp for {self.region} called with no channels or 0 steps.")
+            logger.warning(f"Ramp for {self.region} called with no channels or 0 steps.")
             return
 
         try:
             self._execute_ramp(trajectories, num_steps_total, self.ramp_time_step_s)
         except KeyboardInterrupt:
-            logging.warning(f"Ramp for {self.region} interrupted by user (KeyboardInterrupt).")
+            logger.warning(f"Ramp for {self.region} interrupted by user (KeyboardInterrupt).")
             self._status_update_func("Ramp interrupted by user.", "warning")
             self.emergency_stop()
         except Exception as e:
-            logging.error(f"Unhandled exception in {self.region} ramp execution: {e}", exc_info=True)
+            logger.error(f"Unhandled exception in {self.region} ramp execution: {e}", exc_info=True)
             self._status_update_func(f"Runtime error in ramp: {e}", "error")
             self.emergency_stop()
             raise
@@ -514,7 +516,7 @@ class TISystem:
                 # 1. Check for stop signal
                 if self._stop_event.is_set():
                     self._status_update_func("Ramp interrupted by stop event.", "warning")
-                    logging.warning(f"{self.region}: Ramp interrupted by stop event.")
+                    logger.warning(f"{self.region}: Ramp interrupted by stop event.")
                     break
 
                 step_start_time = time.perf_counter()
@@ -533,7 +535,7 @@ class TISystem:
                     # ----------------------------------------
 
                 except Exception as e:
-                    logging.error(f"Error setting voltage during step {i}: {e}", exc_info=True)
+                    logger.error(f"Error setting voltage during step {i}: {e}", exc_info=True)
                     self._status_update_func(f"Hardware Error setting voltage: {e}", "error")
                     self.emergency_stop()
                     return
@@ -544,7 +546,7 @@ class TISystem:
                     try:
                         self._progress_callback(self.region, progress)
                     except Exception as e:
-                        logging.warning(f"Progress callback for {self.region} failed: {e}")
+                        logger.warning(f"Progress callback for {self.region} failed: {e}")
 
                 # 4. --- Timing ---
                 if time_step_s > 0:
@@ -571,11 +573,11 @@ class TISystem:
                         )
                     
                     final_voltages_str = ", ".join(final_voltages_str_list)
-                    logging.info(f"{self.region}: Ramp finished in {time.time() - start_time:.2f}s. Final Voltages: [{final_voltages_str}]")
+                    logger.info(f"{self.region}: Ramp finished in {time.time() - start_time:.2f}s. Final Voltages: [{final_voltages_str}]")
                     self._status_update_func(f"Ramp finished. Voltages: [{final_voltages_str}]", "success")
 
                 except Exception as e:
-                    logging.error(f"Error setting final voltage: {e}", exc_info=True)
+                    logger.error(f"Error setting final voltage: {e}", exc_info=True)
                     self._status_update_func(f"Hardware Error setting final voltage: {e}", "error")
                     self.emergency_stop()
                     return
@@ -590,7 +592,7 @@ class TISystem:
                 
                 current_voltages_str = ", ".join(current_voltages_str_list)
                 self._status_update_func(f"Ramp stopped prematurely. Current Voltages: [{current_voltages_str}]", "warning")
-                logging.warning(f"{self.region}: Ramp stopped prematurely. Voltages left at: [{current_voltages_str}]")
+                logger.warning(f"{self.region}: Ramp stopped prematurely. Voltages left at: [{current_voltages_str}]")
 
         finally:
             # Clear console line if default callback was used
