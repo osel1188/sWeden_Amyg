@@ -6,10 +6,3 @@ testerss.py
 *.xlsx
 *.xlsx
 cfg/participant_conditions_path.txt
-
-# Distribution / packaging
-build/
-dist/
-src/sweden-amyg
-*.egg-info/
-*.egg

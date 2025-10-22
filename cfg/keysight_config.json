@@ -1,0 +1,51 @@
+{
+    "devices": {
+      "master": {
+        "resource_name": "USB0::0x2A8D::0x8D01::CN64050087::0::INSTR",
+        "output_channels": [1, 2],
+        "source_channels": [1, 2]
+      },
+      "slave_1": {
+        "resource_name": "USB0::0x2A8D::0x8D01::CN62490141::0::INSTR",
+        "output_channels": [1, 2],
+        "source_channels": [1, 2]
+      }
+    },
+    "stimulation_params": {
+      "STIM": {
+        "master_freqs": [7000, 7130],
+        "slave_freqs": [9000, 9130]
+      },
+      "SHAM": {
+        "master_freqs": [7000, 7000],
+        "slave_freqs": [9000, 9000]
+      }
+    },
+    "device_defaults": {
+      "function": "SIN",
+      "load_impedance": "INFinity",
+      "burst_num_cycles": "INFinity",
+      "burst_state": true,
+      "burst_mode": "TRIGgered",
+      "burst_phase": 0
+    },
+    "ramp": {
+      "duration_seconds": 60,
+      "time_step_ms": 100
+    },
+    "safety": {
+      "max_voltage_amplitude": 8.0
+    },
+    "channels": {
+        "total": 4,
+        "mapping": [
+            {"device": "master", "source": 1, "name": "A1"},
+            {"device": "master", "source": 2, "name": "A2"},
+            {"device": "slave_1", "source": 1, "name": "B1"},
+            {"device": "slave_1", "source": 2, "name": "B2"}
+        ]
+    }
+  }
+
+
+  
