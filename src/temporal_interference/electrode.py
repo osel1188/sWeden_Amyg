@@ -18,3 +18,15 @@ class ElectrodePair:
 
     def __len__(self) -> int:
         return len(self.electrodes)
+
+    def __str__(self) -> str:
+        """Provides a human-readable string representation for display."""
+        try:
+            # Access electrodes directly
+            e1 = self.electrodes[0]
+            e2 = self.electrodes[1]
+            # Format: (Region1/Name1) - (Region2/Name2)
+            return f"({e1.region}/{e1.name}) - ({e2.region}/{e2.name})"
+        except (AttributeError, IndexError, TypeError):
+            # Fallback for empty or malformed pair
+            return "Invalid Electrode Pair"
