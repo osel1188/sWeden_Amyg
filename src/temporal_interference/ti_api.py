@@ -1,17 +1,17 @@
-# ti_controller.py
+# ti_api_modified.py
 #
 # Central application controller (facade) that manages the TIManager.
 # This layer is shared by the CLI and any GUI (e.g., Flask).
 
 import logging
-from typing import Optional, Tuple, Any, Dict, List
+from typing import Optional, Tuple, Any, Dict, List, Set
 
 # Assuming ti_manager and ti_system are accessible
 from temporal_interference.ti_manager import TIManager
 from temporal_interference.ti_system import TISystemState
 
 
-class TIController:
+class TIAPI:
     """
     Acts as a central controller or facade for the TIManager.
     
@@ -24,7 +24,21 @@ class TIController:
 
     def __init__(self, manager: TIManager):
         self.manager = manager
-        logging.info("TIController initialized.")
+        logging.info("TIAPI initialized.")
+
+    # --- NEW METHOD ---
+    def connect_hardware(self) -> Tuple[bool, str]:
+        """
+        Connects to all hardware resources (waveform generators).
+        Returns: (success, message)
+        """
+        try:
+            self.manager.connect_all_hardware()
+            return (True, "All hardware resources connected successfully.")
+        except Exception as e:
+            logging.error(f"Error during hardware connection: {e}", exc_info=True)
+            return (False, f"An unexpected error occurred during hardware connection: {e}")
+    # --- END NEW METHOD ---
 
     def get_system_summary(self) -> Dict[str, Any]:
         """
@@ -115,6 +129,76 @@ class TIController:
             logging.error(f"Error getting status: {e}", exc_info=True)
             return (False, f"An unexpected error occurred: {e}")
 
+    # --- MODIFICATION: NEW DIGESTIBLE GETTERS ---
+
+    def get_overall_status(self) -> Tuple[bool, str]:
+        """
+        Gets a single, high-level aggregated status for all systems.
+        Possible return values: IDLE, ERROR, MIXED, or a specific
+        TISystemState name if all systems are in that state.
+        
+        Returns: (success, status_string)
+        """
+        try:
+            systems = self.manager.ti_systems.values()
+            if not systems:
+                return (True, "IDLE")
+
+            unique_states: Set[TISystemState] = {s.state for s in systems}
+            
+            if TISystemState.ERROR in unique_states:
+                return (True, "ERROR")
+            
+            if len(unique_states) > 1:
+                return (True, "MIXED")
+            
+            # All systems are in the same state
+            return (True, unique_states.pop().name)
+
+        except Exception as e:
+            logging.error(f"Error getting overall status: {e}", exc_info=True)
+            return (False, f"An unexpected error occurred: {e}")
+
+    def get_system_states(self) -> Tuple[bool, Dict[str, str]]:
+        """
+        Gets a simple dictionary mapping system keys to their current state name.
+        
+        Example: {"ti_A": "RUNNING_AT_TARGET", "ti_B": "IDLE"}
+        
+        Returns: (success, state_map_or_message)
+        """
+        try:
+            state_map = {
+                key: system.state.name
+                for key, system in self.manager.ti_systems.items()
+            }
+            return (True, state_map)
+        except Exception as e:
+            logging.error(f"Error getting system states: {e}", exc_info=True)
+            return (False, f"An unexpected error occurred: {e}")
+
+    def get_all_current_voltages(self) -> Tuple[bool, Dict[str, Dict[str, float]]]:
+        """
+        Gets a nested dictionary of current voltages for all channels.
+        
+        Example: {"ti_A": {"A1": 1.5, "A2": 1.5}, "ti_B": {"B1": 0.0}}
+        
+        Returns: (success, voltage_map_or_message)
+        """
+        try:
+            voltage_map: Dict[str, Dict[str, float]] = {}
+            for system_key, system in self.manager.ti_systems.items():
+                voltage_map[system_key] = {
+                    channel_key: channel.get_current_voltage()
+                    for channel_key, channel in system.channels.items()
+                }
+            return (True, voltage_map)
+        except Exception as e:
+            logging.error(f"Error getting current voltages: {e}", exc_info=True)
+            return (False, f"An unexpected error occurred: {e}")
+
+    # --- END OF NEW METHODS ---
+
     def ramp_single_channel(self, system_key: str, channel_key: str, 
                             target_voltage: float, 
                             rate_v_per_s: Optional[float] = None) -> Tuple[bool, str]:
@@ -141,7 +225,7 @@ class TIController:
             return (True, msg)
             
         except KeyError:
-            return (False, f"Error: System '{system_key}' or Channel '{channel_key}' not found.")
+            return (False, f"Error: System '{system_key}' or Channel '{system_key}' not found.")
         except Exception as e:
             logging.error(f"Error during ramp: {e}", exc_info=True)
             return (False, f"An unexpected error occurred: {e}")
@@ -165,6 +249,28 @@ class TIController:
         except Exception as e:
             logging.error(f"Error in set_target_v: {e}", exc_info=True)
             return (False, f"An unexpected error occurred: {e}")
+
+    # --- NEW METHOD AS REQUESTED ---
+    def get_channel_target_voltage(self, system_key: str, channel_key: str) -> Tuple[bool, Any]:
+        """
+        Gets the configured target voltage parameter for a single channel.
+        Returns: (success, voltage_or_message)
+        """
+        try:
+            # get_system raises KeyError if system_key is bad
+            system = self.manager.get_system(system_key)
+            
+            # system.channels[...] raises KeyError if channel_key is bad
+            voltage = system.channels[channel_key].target_voltage
+            
+            return (True, voltage)
+            
+        except KeyError:
+            return (False, f"Error: System '{system_key}' or Channel '{channel_key}' not found.")
+        except Exception as e:
+            logging.error(f"Error in get_target_v: {e}", exc_info=True)
+            return (False, f"An unexpected error occurred: {e}")
+    # --- END NEW METHOD ---
 
     def wait_for_ramps(self, timeout_s: Optional[float] = None) -> Tuple[bool, str]:
         """
