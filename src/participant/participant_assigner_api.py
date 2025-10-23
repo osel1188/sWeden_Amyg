@@ -89,6 +89,23 @@ class ParticipantAssignerAPI:
         """Returns a DataFrame of participants list subjects who have NOT participated."""
         return self.not_participated_list
 
+    # --- NEW METHOD ---
+    def get_last_participant_condition(self) -> Optional[Any]:
+        """
+        Returns the 'condition' value for the last processed participant.
+        
+        :return: The value of the 'condition' column (e.g., 'A', 'B') or None
+                 if no participant has been processed or if the last
+                 operation resulted in no data (e.g., 'no_rows_available').
+        """
+        if self.last_result and self.last_result.get("data") is not None:
+            # 'data' is the pd.Series of the participant's row
+            participant_data: pd.Series = self.last_result["data"]
+            # 'condition' is guaranteed by ConditionRepository required_cols
+            return participant_data.get("condition")
+        
+        return None
+
     # --- Main API Method ---
 
     def process_participant(
