@@ -194,9 +194,12 @@ class TIConfig:
                 
                 # Find the assigned preset name for this generator
                 preset_name: str | None = None
+                # --- MODIFICATION: Store the entire assignment dict ---
+                assignment_dict: Dict | None = None
                 for assignment in preset_assignments:
                     if assignment.get('generator_id') == generator_id:
                         preset_name = assignment.get('preset')
+                        assignment_dict = assignment # Store for overwrite access
                         break
                 
                 # Get the actual configuration dictionary from the preset name
@@ -207,6 +210,16 @@ class TIConfig:
                     
                     if not preset_config:
                         logger.warning(f"Preset '{preset_name}' for generator '{generator_id}' not found. Settings will be None.")
+                    
+                    # --- MODIFICATION: Apply overwrites ---
+                    elif assignment_dict:
+                        overwrite_config = assignment_dict.get('overwrite')
+                        if isinstance(overwrite_config, dict):
+                            logger.info(f"Applying preset overwrites for generator '{generator_id}': {list(overwrite_config.keys())}")
+                            # Merge overwrite dict, overwriting base preset keys
+                            preset_config.update(overwrite_config)
+                    # --- END MODIFICATION ---
+                            
                 else:
                     logger.warning(f"No preset assignment found for generator '{generator_id}'. Settings will be None.")
 
@@ -214,7 +227,7 @@ class TIConfig:
                 output_configs[generator_id] = {
                     'model': model,
                     'resource_id': resource_name,
-                    'settings': preset_config  # This is a deep copy or None
+                    'settings': preset_config  # This now contains merged settings
                 }
             
             except KeyError as e:

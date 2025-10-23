@@ -68,11 +68,20 @@
       "burst_num_cycles": "INFinity",
       "burst_state": true,
       "burst_mode": "TRIGgered",
-      "burst_phase": 0
+      "burst_phase": 0,
+      "trigger_source": "EXT"
     },
-    "waveform_generator_presets_assignments": [
-      { "generator_id": "generator_A", "preset": "default" },
-      { "generator_id": "generator_B", "preset": "default" }
+    "waveform_generator_presets_assignments": [ { 
+        "generator_id": "generator_A", 
+        "preset": "default", 
+        "overwrite": {
+          "trigger_source": "BUS"
+        }
+      },
+      { 
+        "generator_id": "generator_B", 
+        "preset": "default" 
+      }
     ],
     "safety_limits": {
       "max_amplitude_vp": 8.0

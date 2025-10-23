@@ -347,7 +347,13 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                     self._write(f":SOURce{ch}:BURSt:MODE {config.get('burst_mode', 'TRIG')}")
                     logger.debug(f"Defaults applied to channel {ch} for {self.name}.")
                 
-                # --- Set flag AFTER successful initialization ---
+                trigger_source: str = config.get('trigger_source').upper().strip()
+                logger.info(f"Applying trigger source setting: '{trigger_source}'")
+                if trigger_source == 'BUS':
+                    self.set_trigger_source_bus()
+                elif trigger_source == 'EXT':
+                    self.set_trigger_source_external()
+
                 shared_data["initialized"] = True
                 logger.info(f"One-time initialization complete for {self.resource_id}.")
 
