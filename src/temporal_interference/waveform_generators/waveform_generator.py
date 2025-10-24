@@ -239,29 +239,35 @@ class AbstractWaveformGenerator(ABC):
         pass
 
     @abstractmethod
-    def set_trigger_source_bus(self, channel: int) -> None:
+    def activate_channels(self) -> None:
         """
-        Sets the trigger source to BUS (software/internal) for a specific channel.
-
-        Args:
-            channel (int): The channel number.
+        Enables the physical output state for the device channels.
+        This action alone may not start waveform generation; see start_generation().
         """
         pass
 
     @abstractmethod
-    def set_trigger_source_external(self, channel: int) -> None:
+    def deactivate_channels(self) -> None:
         """
-        Sets the trigger source to EXT (external hardware trigger) for a specific channel.
-
-        Args:
-            channel (int): The channel number.
+        Disables the physical output state for the device channels.
+        This is the functional equivalent of stop_generation().
         """
         pass
-        
+
     @abstractmethod
-    def trigger(self) -> None:
+    def enable_generation(self) -> None:
         """
-        Sends a software trigger to the instrument.
+        Starts waveform generation on the device channels.
+        This compound action typically enables the channel outputs and then
+        sends a software trigger to the device.
+        """
+        pass
+
+    @abstractmethod
+    def disable_generation(self) -> None:
+        """
+        Stops waveform generation on the device channels.
+        This action typically disables the channel outputs.
         """
         pass
 

@@ -155,6 +155,10 @@ class TISystem:
         all_channel_durations = {key: duration_s for key in self.channels}
         self.setup_ramp_durations(all_channel_durations)
     
+    def apply_config(self):
+        for key in self.channels:
+            self.channels[key].apply_config()
+
     # --- start() is state-aware (logic unchanged) ---
     def start(self) -> None:
         """
@@ -322,7 +326,7 @@ class TISystem:
             )
             self._ramp_thread.start()
 
-    # --- MODIFIED: _threaded_ramp_single_channel_task is N-channel aware ---
+    # --- _threaded_ramp_single_channel_task is N-channel aware ---
     def _threaded_ramp_single_channel_task(self, channel_key: str, target_voltage: float, rate_v_per_s: float) -> None:
         """
         [THREAD-TARGET] Contains the blocking logic for a single channel
@@ -402,7 +406,7 @@ class TISystem:
             with self._state_lock:
                 self._ramp_thread = None
 
-    # --- MODIFIED: E-Stop iterates channels ---
+    # --- E-Stop iterates channels ---
     def emergency_stop(self) -> None:
         """
         Immediately sets all channel amplitudes to 0V and turns outputs off.
@@ -424,7 +428,7 @@ class TISystem:
             logger.error(f"Error during emergency stop for {self.region}: {e}", exc_info=True)
             self._status_update_func(f"Critical error during e-stop {self.region}: {e}", "error")
 
-    # --- MODIFIED: _calculate_trajectories is N-channel aware ---
+    # --- _calculate_trajectories is N-channel aware ---
     def _calculate_trajectories(self, 
                                 target_voltages: Dict[str, float], 
                                 duration_secs: Dict[str, float]
@@ -439,7 +443,7 @@ class TISystem:
 
         if not self.channels:
             return {}, 0
-            
+        
         for key, channel in self.channels.items():
             # Get start voltage from channel state (thread-safe)
             start_v = channel.get_current_voltage()
@@ -471,7 +475,7 @@ class TISystem:
         
         return trajectories, num_steps_total
 
-    # --- MODIFIED: ramp() takes dicts ---
+    # --- ramp() takes dicts ---
     def ramp(self, target_voltages: Dict[str, float], duration_secs: Dict[str, float]) -> None:
         """
         Calculates voltage trajectories and executes the (blocking) ramp.
@@ -497,7 +501,7 @@ class TISystem:
             self.emergency_stop()
             raise
             
-    # --- MODIFIED: _execute_ramp() is N-channel aware ---
+    # --- _execute_ramp() is N-channel aware ---
     def _execute_ramp(self, trajectories: Dict[str, np.ndarray], num_steps_total: int, time_step_s: float) -> None:
         """ 
         Contains the core loop for executing the voltage ramp.

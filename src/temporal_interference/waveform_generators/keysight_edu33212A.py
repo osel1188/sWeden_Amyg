@@ -336,6 +336,8 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
             # --- Proceed with Initialization ---
             logger.info(f"Applying one-time initial settings for {self.resource_id} (by instance '{self.name}')...")
             try:
+                self._write('SYSTem:BEEPer:STATe OFF')
+
                 self.channels = config.get('source_channels', [1, 2])
                 for ch in self.channels:
                     self.set_output_state(ch, OutputState.OFF)
@@ -345,15 +347,11 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                     self._write(f":SOURce{ch}:BURSt:STATe {1 if config.get('burst_state', True) else 0}")
                     self._write(f":SOURce{ch}:BURSt:NCYCles {config.get('burst_num_cycles', 'INF')}")
                     self._write(f":SOURce{ch}:BURSt:MODE {config.get('burst_mode', 'TRIG')}")
+                    self._write(f':TRIGger{ch}:SOURce {config.get('trigger_source')}')
+                    self._write(f':OUTPut{ch}:TRIGger:STATe ON')
+                    self.set_amplitude(ch, 0.0)
                     logger.debug(f"Defaults applied to channel {ch} for {self.name}.")
                 
-                trigger_source: str = config.get('trigger_source').upper().strip()
-                logger.info(f"Applying trigger source setting: '{trigger_source}'")
-                if trigger_source == 'BUS':
-                    self.set_trigger_source_bus()
-                elif trigger_source == 'EXT':
-                    self.set_trigger_source_external()
-
                 shared_data["initialized"] = True
                 logger.info(f"One-time initialization complete for {self.resource_id}.")
 
@@ -361,54 +359,36 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
                 logger.error(f"Failed to apply settings for {self.resource_id}: {e}")
                 # Do not set initialized = True if it failed
                 raise ConnectionError(f"VISA I/O Error during settings initialization for {self.resource_id}") from e
-
-    def set_trigger_source_bus(self) -> None:
-        """Sets the trigger source to BUS (software/internal)."""
-        for ch in self.channels:
-            self._write(f':TRIGger{ch}:SOURce BUS')
-            logger.debug(f"Device '{self.name}': Channel {ch} trigger source set to BUS")
-        self.enable_output_trigger()
     
-    def set_trigger_source_external(self) -> None:
-        """Sets the trigger source to EXT (external hardware trigger)."""
-        for ch in self.channels:
-            self._write(f':TRIGger{ch}:SOURce EXT')
-            logger.debug(f"Device '{self.name}': Channel {ch} trigger source set to EXT")
-        self.enable_output_trigger()
-    
-    def set_output_trigger(self, state: str) -> None:
+    def activate_channels(self) -> None:
         """
-        Sets the output trigger signal state for all channels.
-        This configures the instrument to start channels when trigger mode is ON.
-        Args:
-            state (str): The desired trigger state. Must be 'ON' or 'OFF'
-                         (case-insensitive).
+        Enables the physical output state for all channels.
+        This only arms the output; it does not trigger generation.
         """
-        # Normalize and validate state
-        norm_state = state.upper().strip()
-        if norm_state not in ('ON', 'OFF'):
-            raise ValueError(f"Invalid state '{state}'. Must be 'ON' or 'OFF'.")
-        
-        # Determine log message based on normalized state
-        log_msg = "enabled" if norm_state == 'ON' else "disabled"
-        
+        logger.info(f"Activating output state for channels {self.channels} on {self.name}.")
         for ch in self.channels:
-            self._write(f':OUTPut{ch}:TRIGger:STATe {norm_state}')
-            logger.debug(f"Device '{self.name}': Channel {ch} {log_msg} for output trigger.")
-
-    def enable_output_trigger(self) -> None:
-        self.set_output_trigger('ON')
-
-    def disable_output_trigger(self) -> None:
-        self.set_output_trigger('OFF')
+            self.set_output_state(ch, OutputState.ON)
     
-    def trigger(self) -> None:
+    def deactivate_channels(self) -> None:
+        """
+        Disables the physical output state for all channels.
+        This only arms the output; it does not trigger generation.
+        """
+        logger.info(f"Activating output state for channels {self.channels} on {self.name}.")
+        for ch in self.channels:
+            self.set_output_state(ch, OutputState.OFF)
+
+    def enable_generation(self) -> None:
         """
         Sends a software trigger (*TRG). 
         It will work only if the device is set to source bus trigger.
         """
         logger.info(f"Sending software trigger to {self.name}.")
-        self._write('*TRG')
+        if self._settings["trigger_source"] == 'BUS':
+            self._write('*TRG')
+
+    def disable_generation(self) -> None:
+        self._write(':ABORt')
 
     def abort(self) -> None:
         """Aborts the current waveform generation."""

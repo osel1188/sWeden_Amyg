@@ -88,7 +88,7 @@
     }
   },
   "protocols": {
-    "STIM": {
+    "active": {
       "description": "Active stimulation protocol with a 130 Hz beat frequency.",
       "ti_A": {
         "channel_settings": [
@@ -103,7 +103,7 @@
         ]
       }
     },
-    "SHAM": {
+    "sham": {
       "description": "Sham protocol with no beat frequency.",
       "common_settings": { "target_voltage_V": 1.0, "ramp_duration_s": 60 },
       "ti_A": {
