@@ -21,15 +21,22 @@ from .waveform_generators.waveform_generator import (
 # --- Define the module-level logger ---
 logger = logging.getLogger(__name__)
 
-# --- TISystemState Enum ---
-class TISystemState(Enum):
-    """Defines the discrete operational states of the TISystem."""
+# --- TISystemLogicState Enum (MODIFIED) ---
+class TISystemLogicState(Enum):
+    """Defines the discrete operational *logic* states of the TISystem."""
     IDLE = auto()
     RAMPING_UP = auto()
     RUNNING_AT_TARGET = auto()
     RAMPING_DOWN = auto()
     RAMPING_INTERMEDIATE = auto()
     RUNNING_INTERMEDIATE = auto()
+    ERROR = auto()
+
+# --- TISystemHardwareState Enum (NEW) ---
+class TISystemHardwareState(Enum):
+    """Defines the *physical* hardware state based on live queries."""
+    IDLE = auto()
+    RUNNING = auto()
     ERROR = auto()
 
 
@@ -50,8 +57,8 @@ class TISystem:
         self._progress_callback: Optional[Callable[[str, float], None]] = progress_callback or self._default_progress_update
         self._spinner = ['◜', '◝', '◞', '◟']
 
-        # --- State Management ---
-        self._state: TISystemState = TISystemState.IDLE
+        # --- State Management (MODIFIED) ---
+        self._logic_state: TISystemLogicState = TISystemLogicState.IDLE
         self._state_lock = threading.RLock()
         self._ramp_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event() 
@@ -78,20 +85,48 @@ class TISystem:
         sys.stdout.flush()
 
     @property
-    def state(self) -> TISystemState:
-        """Returns the current operational state of the system."""
+    def logic_state(self) -> TISystemLogicState:
+        """Returns the current *intended* operational state of the system."""
         with self._state_lock:
-            return self._state
+            return self._logic_state
+
+    # --- Hardware State Property ---
+    @property
+    def hardware_state(self) -> TISystemHardwareState:
+        """
+        Queries the actual hardware state by checking device amplitudes.
+        Returns RUNNING if any channel voltage is non-zero, IDLE otherwise.
+        This performs live I/O and may be slow.
+        """
+        # Note: This checks the *actual* hardware via the generator,
+        # not the TIChannel's cached `_current_voltage` state.
+        try:
+            for channel in self.channels.values():
+                # Direct hardware query
+                voltage = channel.generator.get_amplitude(channel.wavegen_channel)
+                
+                # Use a small tolerance for floating point comparison
+                if abs(voltage) > 1e-6:
+                    return TISystemHardwareState.RUNNING
+                    
+            # All channels must be at 0.0
+            return TISystemHardwareState.IDLE
+            
+        except Exception as e:
+            # Log the error and report an ERROR state
+            logger.error(f"Failed to query hardware state for {self.region}: {e}", exc_info=True)
+            self._status_update_func(f"Failed to get hardware state: {e}", "error")
+            return TISystemHardwareState.ERROR
 
     @property
     def is_running(self) -> bool:
         """
-        True if system is at target or intermediate voltage, False otherwise.
+        True if system is *logically* at target or intermediate voltage.
         """
         with self._state_lock:
-            return self._state in {
-                TISystemState.RUNNING_AT_TARGET, 
-                TISystemState.RUNNING_INTERMEDIATE
+            return self._logic_state in {
+                TISystemLogicState.RUNNING_AT_TARGET, 
+                TISystemLogicState.RUNNING_INTERMEDIATE
             }
 
     @property
@@ -105,7 +140,7 @@ class TISystem:
         """True if the stop event has been set. Thread-safe."""
         return self._stop_event.is_set()
 
-    # --- MODIFIED: Setup methods are now dict-based ---
+    # --- Setup methods are now dict-based ---
     
     def _validate_channel_keys(self, data: Dict[str, float], operation: str) -> bool:
         """Helper to validate keys in setup methods."""
@@ -159,7 +194,7 @@ class TISystem:
         for key in self.channels:
             self.channels[key].apply_config()
 
-    # --- start() is state-aware (logic unchanged) ---
+    # --- start() is state-aware (logic modified) ---
     def start(self) -> None:
         """
         Applies frequencies, turns on outputs, and starts a non-blocking
@@ -170,14 +205,14 @@ class TISystem:
                 self._status_update_func(f"System {self.region} is already ramping.", "warning")
                 return
             
-            if self._state != TISystemState.IDLE:
-                self._status_update_func(f"System {self.region} is not IDLE (state: {self._state.name}). Cannot start.", "warning")
+            if self._logic_state != TISystemLogicState.IDLE:
+                self._status_update_func(f"System {self.region} is not IDLE (state: {self._logic_state.name}). Cannot start.", "warning")
                 return
 
             self._status_update_func(f"Starting system {self.region}...", "info")
             
             self._stop_event.clear()
-            self._state = TISystemState.RAMPING_UP
+            self._logic_state = TISystemLogicState.RAMPING_UP
             
             self._ramp_thread = threading.Thread(
                 target=self._threaded_start_task, 
@@ -185,7 +220,7 @@ class TISystem:
             )
             self._ramp_thread.start()
 
-    # --- MODIFIED: _threaded_start_task iterates channels ---
+    # --- MODIFIED: _threaded_start_task iterates channels and updates logic_state ---
     def _threaded_start_task(self) -> None:
         """[THREAD-TARGET] Contains the blocking logic for setup and ramp-up."""
         try:
@@ -206,23 +241,23 @@ class TISystem:
             # 3. Update state on success
             with self._state_lock:
                 if not self._stop_event.is_set():
-                    self._state = TISystemState.RUNNING_AT_TARGET
+                    self._logic_state = TISystemLogicState.RUNNING_AT_TARGET
                     self._status_update_func(f"System {self.region} is running at target.", "success")
                 else:
-                    self._state = TISystemState.IDLE
+                    self._logic_state = TISystemLogicState.IDLE
                     
         except Exception as e:
             error_msg = f"Failed to start TISystem {self.region}: {e}"
             logger.error(error_msg, exc_info=True)
             self._status_update_func(f"Error starting {self.region}: {e}", "error")
             with self._state_lock:
-                self._state = TISystemState.ERROR
+                self._logic_state = TISystemLogicState.ERROR
             self.emergency_stop()
         finally:
             with self._state_lock:
                 self._ramp_thread = None
 
-    # --- stop() is state-aware (logic unchanged) ---
+    # --- stop() is state-aware (logic modified) ---
     def stop(self) -> None:
         """
         Starts a non-blocking ramp down to zero for all channels 
@@ -233,12 +268,12 @@ class TISystem:
                 self._status_update_func(f"System {self.region} is already ramping.", "warning")
                 return
             
-            if self._state == TISystemState.IDLE:
+            if self._logic_state == TISystemLogicState.IDLE:
                 self._status_update_func(f"System {self.region} is already stopped.", "info")
                 return
 
             self._status_update_func(f"Stopping system {self.region}...", "info")
-            self._state = TISystemState.RAMPING_DOWN
+            self._logic_state = TISystemLogicState.RAMPING_DOWN
             
             self._stop_event.clear()
             
@@ -248,7 +283,7 @@ class TISystem:
             )
             self._ramp_thread.start()
     
-    # --- MODIFIED: _threaded_stop_task iterates channels ---
+    # --- MODIFIED: _threaded_stop_task iterates channels and updates logic_state ---
     def _threaded_stop_task(self) -> None:
         """[THREAD-TARGET] Contains the blocking logic for ramp-down and shutdown."""
         try:
@@ -268,18 +303,18 @@ class TISystem:
                     
                 self._status_update_func(f"System {self.region} stopped.", "success")
                 with self._state_lock:
-                    self._state = TISystemState.IDLE
+                    self._logic_state = TISystemLogicState.IDLE
             else:
                 self._status_update_func(f"System {self.region} stop was interrupted.", "warning")
                 with self._state_lock:
-                    if self._state != TISystemState.ERROR:
-                        self._state = TISystemState.IDLE
+                    if self._logic_state != TISystemLogicState.ERROR:
+                        self._logic_state = TISystemLogicState.IDLE
                 
         except Exception as e:
             logger.error(f"Failed to turn off outputs for {self.region}: {e}", exc_info=True)
             self._status_update_func(f"Error stopping {self.region}: {e}", "error")
             with self._state_lock:
-                self._state = TISystemState.ERROR
+                self._logic_state = TISystemLogicState.ERROR
             self.emergency_stop() 
         
         finally:
@@ -288,7 +323,7 @@ class TISystem:
             
             self._stop_event.clear()
 
-    # --- MODIFIED: ramp_channel_voltage accepts channel_key: str ---
+    # --- MODIFIED: ramp_channel_voltage accepts channel_key: str, updates logic_state ---
     def ramp_channel_voltage(self, channel_key: str, target_voltage: float, rate_v_per_s: float = 0.1) -> None:
         """
         Starts a non-blocking ramp for a *single* channel (by key) to a
@@ -310,14 +345,14 @@ class TISystem:
                 self._status_update_func(f"System {self.region} is already ramping.", "warning")
                 return
             
-            if self._state == TISystemState.ERROR:
+            if self._logic_state == TISystemLogicState.ERROR:
                  self._status_update_func(f"System {self.region} is in ERROR state. Cannot ramp.", "warning")
                  return
 
             self._status_update_func(f"Ramping {channel_key} for {self.region}...", "info")
             
             self._stop_event.clear()
-            self._state = TISystemState.RAMPING_INTERMEDIATE
+            self._logic_state = TISystemLogicState.RAMPING_INTERMEDIATE
             
             self._ramp_thread = threading.Thread(
                 target=self._threaded_ramp_single_channel_task,
@@ -326,7 +361,7 @@ class TISystem:
             )
             self._ramp_thread.start()
 
-    # --- _threaded_ramp_single_channel_task is N-channel aware ---
+    # --- _threaded_ramp_single_channel_task is N-channel aware, updates logic_state ---
     def _threaded_ramp_single_channel_task(self, channel_key: str, target_voltage: float, rate_v_per_s: float) -> None:
         """
         [THREAD-TARGET] Contains the blocking logic for a single channel
@@ -384,29 +419,29 @@ class TISystem:
                             all_at_zero = False
                     
                     if all_at_target:
-                        self._state = TISystemState.RUNNING_AT_TARGET
+                        self._logic_state = TISystemLogicState.RUNNING_AT_TARGET
                         self._status_update_func(f"System {self.region} is running at target.", "success")
                     elif all_at_zero:
-                        self._state = TISystemState.IDLE
+                        self._logic_state = TISystemLogicState.IDLE
                         self._status_update_func(f"System {self.region} stopped.", "success")
                     else:
-                        self._state = TISystemState.RUNNING_INTERMEDIATE
+                        self._logic_state = TISystemLogicState.RUNNING_INTERMEDIATE
                         self._status_update_func(f"System {self.region} at custom voltage.", "info")
                 else:
-                    self._state = TISystemState.IDLE
+                    self._logic_state = TISystemLogicState.IDLE
                     
         except Exception as e:
             error_msg = f"Failed to ramp channel {channel_key} for TISystem {self.region}: {e}"
             logger.error(error_msg, exc_info=True)
             self._status_update_func(f"Error ramping {channel_key} ({self.region}): {e}", "error")
             with self._state_lock:
-                self._state = TISystemState.ERROR
+                self._logic_state = TISystemLogicState.ERROR
             self.emergency_stop()
         finally:
             with self._state_lock:
                 self._ramp_thread = None
 
-    # --- E-Stop iterates channels ---
+    # --- E-Stop iterates channels, updates logic_state ---
     def emergency_stop(self) -> None:
         """
         Immediately sets all channel amplitudes to 0V and turns outputs off.
@@ -416,7 +451,7 @@ class TISystem:
         self._stop_event.set()
         
         with self._state_lock:
-            self._state = TISystemState.ERROR
+            self._logic_state = TISystemLogicState.ERROR
         
         self._status_update_func(f"EMERGENCY STOP triggered for {self.region}", "error")
         logger.warning(f"EMERGENCY STOP triggered for {self.region}")
