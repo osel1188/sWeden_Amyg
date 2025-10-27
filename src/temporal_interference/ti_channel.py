@@ -110,3 +110,4 @@ class TIChannel:
             self.generator.set_amplitude(self.wavegen_channel, 0.0)
             self.generator.set_output_state(self.wavegen_channel, OutputState.OFF)
             self._current_voltage = 0.0
+    
