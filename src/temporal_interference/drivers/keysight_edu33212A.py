@@ -53,7 +53,7 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         self,
         resource_id: str,
         name: str = "",
-        timeout: int = 10000,
+        timeout: int = 5000,
         rst_delay: float = 1.0,
         clr_delay: float = 0.1,
         **kwargs: Any 
@@ -383,12 +383,12 @@ class KeysightEDU33212A(AbstractWaveformGenerator, model_id="KeysightEDU33212A")
         Sends a software trigger (*TRG). 
         It will work only if the device is set to source bus trigger.
         """
-        logger.info(f"Sending software trigger to {self.name}.")
         if self._settings["trigger_source"] == 'BUS':
+            logger.info(f"Sending software trigger to {self.name}.")
             self._write('*TRG')
 
     def disable_generation(self) -> None:
-        self._write(':ABORt')
+        self.abort()
 
     def abort(self) -> None:
         """Aborts the current waveform generation."""
