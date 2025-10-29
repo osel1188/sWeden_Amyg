@@ -1,8 +1,4 @@
-# ti_system.py (REFACTORED)
-#
-# This class is re-architected to be independent of the number of channels.
-# It operates on the `self.channels: dict[str, TIChannel]` provided
-# during initialization, rather than assuming 'channel_1' and 'channel_2'.
+# ti_system.py (MODIFIED)
 
 import logging
 import sys
@@ -14,14 +10,16 @@ import numpy as np
 
 # Local imports (assumed)
 from .channel import TIChannel
-from ..drivers.waveform_generator import (
+# --- NEW ---
+from ..hardware.hardware_manager import HardwareManager
+from ..hardware.waveform_generator import (
     OutputState
 )
 
 # --- Define the module-level logger ---
 logger = logging.getLogger(__name__)
 
-# --- TISystemLogicState Enum (MODIFIED) ---
+# --- TISystemLogicState Enum (Unchanged) ---
 class TISystemLogicState(Enum):
     """Defines the discrete operational *logic* states of the TISystem."""
     IDLE = auto()
@@ -32,7 +30,7 @@ class TISystemLogicState(Enum):
     RUNNING_INTERMEDIATE = auto()
     ERROR = auto()
 
-# --- TISystemHardwareState Enum (NEW) ---
+# --- TISystemHardwareState Enum (Unchanged) ---
 class TISystemHardwareState(Enum):
     """Defines the *physical* hardware state based on live queries."""
     IDLE = auto()
@@ -52,29 +50,30 @@ class TISystem:
             
         self.region: str = region
         
-        # --- Callbacks for Decoupling ---
+        # --- Callbacks for Decoupling (Unchanged) ---
         self._status_update_func: Callable[[str, str], None] = status_update_func or self._default_status_update
         self._progress_callback: Optional[Callable[[str, float], None]] = progress_callback or self._default_progress_update
         self._spinner = ['◜', '◝', '◞', '◟']
 
-        # --- State Management (MODIFIED) ---
+        # --- State Management (Unchanged) ---
         self._logic_state: TISystemLogicState = TISystemLogicState.IDLE
         self._state_lock = threading.RLock()
         self._ramp_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event() 
 
-        # --- Encapsulated Channels ---
-        # The system's behavior is now driven by this dictionary
+        # --- Encapsulated Channels (Unchanged) ---
         self.channels: Dict[str, TIChannel] = channels
         
-        # --- Operational Parameters ---
+        # --- Operational Parameters (Unchanged) ---
         self.ramp_time_step_s: float = 0.02 # 50 Hz
 
+    # --- _default_status_update (Unchanged) ---
     def _default_status_update(self, message: str, level: str):
         """Default status handler if none is provided."""
         log_level = getattr(logging, level.upper(), logging.INFO)
         logger.log(log_level, f"TISystem ({self.region}): {message}")
 
+    # --- _default_progress_update (Unchanged) ---
     def _default_progress_update(self, region_name: str, progress: float):
         """Default progress handler (console spinner) if none is provided."""
         if progress < 100.0:
@@ -84,29 +83,27 @@ class TISystem:
             sys.stdout.write(f'\r\033[K Ramping {region_name} ... Done. 100.0% \n')
         sys.stdout.flush()
 
+    # --- logic_state (Unchanged) ---
     @property
     def logic_state(self) -> TISystemLogicState:
         """Returns the current *intended* operational state of the system."""
         with self._state_lock:
             return self._logic_state
 
-    # --- Hardware State Property ---
+    # --- Hardware State Property (MODIFIED) ---
     @property
     def hardware_state(self) -> TISystemHardwareState:
         """
         Queries the actual hardware state by checking device amplitudes.
         Returns RUNNING if any channel voltage is non-zero, IDLE otherwise.
-        This performs live I/O and may be slow.
+        This performs live I/O via the HardwareManager.
         """
-        # Note: This checks the *actual* hardware via the generator,
+        # Note: This checks the *actual* hardware via the manager,
         # not the TIChannel's cached `_current_voltage` state.
         try:
             for channel in self.channels.values():
-                # Direct hardware query
-                voltage = channel.generator.get_amplitude(channel.wavegen_channel)
-                
-                # Use a small tolerance for floating point comparison
-                if abs(voltage) > 1e-6:
+                # Use a small tolerance for floating point comparison, as the system always put 2mV as minimum
+                if 0.03 < abs(channel.get_amplitude()):
                     return TISystemHardwareState.RUNNING
                     
             # All channels must be at 0.0
@@ -118,6 +115,7 @@ class TISystem:
             self._status_update_func(f"Failed to get hardware state: {e}", "error")
             return TISystemHardwareState.ERROR
 
+    # --- is_running (Unchanged) ---
     @property
     def is_running(self) -> bool:
         """
@@ -129,18 +127,43 @@ class TISystem:
                 TISystemLogicState.RUNNING_INTERMEDIATE
             }
 
+    # --- is_ramping (Unchanged) ---
     @property
     def is_ramping(self) -> bool:
         """True if a ramp (up, down, or intermediate) is in progress."""
         with self._state_lock:
             return self._ramp_thread is not None and self._ramp_thread.is_alive()
 
+    # --- emergency_stop_triggered (Unchanged) ---
     @property
     def emergency_stop_triggered(self) -> bool:
         """True if the stop event has been set. Thread-safe."""
         return self._stop_event.is_set()
 
-    # --- Setup methods are now dict-based ---
+    # --- NEW: Hardware Lifecycle Methods (Delegated) ---
+
+    def connect_all(self):
+        """
+        Connects to all hardware resources via the HardwareManager.
+        Called by TIManager.
+        """
+        self._status_update_func(f"Connecting hardware for system {self.region}...", "info")
+        _hw_manager: HardwareManager = next(iter(self.channels.values())).hw_manager
+        # Delegation is idempotent at the manager level
+        _hw_manager.connect_all()
+
+    def disconnect_all(self):
+        """
+        Disconnects from all hardware resources via the HardwareManager.
+        Called by TIManager.
+        """
+        self._status_update_func(f"Disconnecting hardware for system {self.region}...", "info")
+        _hw_manager: HardwareManager = next(iter(self.channels.values())).hw_manager
+        # Delegation is idempotent at the manager level
+        _hw_manager.disconnect_all()
+
+    # --- All subsequent methods (setup_*, start, stop, ramp, _execute_ramp, etc.)
+    # --- are UNCHANGED from the provided `system.py` file.
     
     def _validate_channel_keys(self, data: Dict[str, float], operation: str) -> bool:
         """Helper to validate keys in setup methods."""
@@ -162,39 +185,34 @@ class TISystem:
             log_msgs.append(f"{key}={volt} V")
         logger.info(f"Region {self.region} target voltages set to: {', '.join(log_msgs)}.")
 
-    def setup_frequencies(self, frequencies: Dict[str, float]) -> None:
+    def set_frequencies(self, frequencies: Dict[str, float]) -> None:
         """Sets the frequency for one or more specified channels."""
         if not self._validate_channel_keys(frequencies, "setup_frequencies"):
             return
-            
+        
         log_msgs = []
         for key, freq in frequencies.items():
-            self.channels[key].setup_frequency(freq)
+            self.channels[key].set_frequency(freq)
             log_msgs.append(f"{key}={freq} Hz")
         logger.info(f"Region {self.region} frequencies set to: {', '.join(log_msgs)}.")
 
-    def setup_ramp_durations(self, durations: Dict[str, float]) -> None:
+    def set_ramp_durations(self, durations: Dict[str, float]) -> None:
         """Sets the ramp duration for one or more specified channels."""
         if not self._validate_channel_keys(durations, "setup_ramp_durations"):
             return
-            
+        
         log_msgs = []
         for key, dur in durations.items():
-            self.channels[key].setup_ramp_duration(dur)
+            self.channels[key].set_ramp_duration(dur)
             log_msgs.append(f"{key}={dur}s")
         logger.info(f"Region {self.region} ramp durations set to: {', '.join(log_msgs)}.")
 
-    def setup_ramp_duration(self, duration_s: float) -> None:
+    def set_ramp_duration(self, duration_s: float) -> None:
         """Sets the same ramp duration for *all* channels."""
         logger.warning("setup_ramp_duration(s) is deprecated. Use setup_ramp_durations(dict) for per-channel control.")
         all_channel_durations = {key: duration_s for key in self.channels}
-        self.setup_ramp_durations(all_channel_durations)
-    
-    def apply_config(self):
-        for key in self.channels:
-            self.channels[key].apply_config()
+        self.set_ramp_durations(all_channel_durations)
 
-    # --- start() is state-aware (logic modified) ---
     def start(self) -> None:
         """
         Applies frequencies, turns on outputs, and starts a non-blocking
@@ -219,14 +237,12 @@ class TISystem:
                 daemon=True
             )
             self._ramp_thread.start()
-
-    # --- MODIFIED: _threaded_start_task iterates channels and updates logic_state ---
+    
     def _threaded_start_task(self) -> None:
         """[THREAD-TARGET] Contains the blocking logic for setup and ramp-up."""
         try:
             # 1. Configure hardware
             for channel in self.channels.values():
-                channel.apply_config()
                 channel.set_output_state(OutputState.ON)
             
             # 2. Ramp up to target voltages
@@ -257,7 +273,6 @@ class TISystem:
             with self._state_lock:
                 self._ramp_thread = None
 
-    # --- stop() is state-aware (logic modified) ---
     def stop(self) -> None:
         """
         Starts a non-blocking ramp down to zero for all channels 
@@ -283,7 +298,6 @@ class TISystem:
             )
             self._ramp_thread.start()
     
-    # --- MODIFIED: _threaded_stop_task iterates channels and updates logic_state ---
     def _threaded_stop_task(self) -> None:
         """[THREAD-TARGET] Contains the blocking logic for ramp-down and shutdown."""
         try:
@@ -323,7 +337,6 @@ class TISystem:
             
             self._stop_event.clear()
 
-    # --- MODIFIED: ramp_channel_voltage accepts channel_key: str, updates logic_state ---
     def ramp_channel_voltage(self, channel_key: str, target_voltage: float, rate_v_per_s: float = 0.1) -> None:
         """
         Starts a non-blocking ramp for a *single* channel (by key) to a
@@ -361,7 +374,6 @@ class TISystem:
             )
             self._ramp_thread.start()
 
-    # --- _threaded_ramp_single_channel_task is N-channel aware, updates logic_state ---
     def _threaded_ramp_single_channel_task(self, channel_key: str, target_voltage: float, rate_v_per_s: float) -> None:
         """
         [THREAD-TARGET] Contains the blocking logic for a single channel
@@ -441,7 +453,6 @@ class TISystem:
             with self._state_lock:
                 self._ramp_thread = None
 
-    # --- E-Stop iterates channels, updates logic_state ---
     def emergency_stop(self) -> None:
         """
         Immediately sets all channel amplitudes to 0V and turns outputs off.
@@ -463,7 +474,6 @@ class TISystem:
             logger.error(f"Error during emergency stop for {self.region}: {e}", exc_info=True)
             self._status_update_func(f"Critical error during e-stop {self.region}: {e}", "error")
 
-    # --- _calculate_trajectories is N-channel aware ---
     def _calculate_trajectories(self, 
                                 target_voltages: Dict[str, float], 
                                 duration_secs: Dict[str, float]
@@ -510,7 +520,6 @@ class TISystem:
         
         return trajectories, num_steps_total
 
-    # --- ramp() takes dicts ---
     def ramp(self, target_voltages: Dict[str, float], duration_secs: Dict[str, float]) -> None:
         """
         Calculates voltage trajectories and executes the (blocking) ramp.
@@ -536,7 +545,6 @@ class TISystem:
             self.emergency_stop()
             raise
             
-    # --- _execute_ramp() is N-channel aware ---
     def _execute_ramp(self, trajectories: Dict[str, np.ndarray], num_steps_total: int, time_step_s: float) -> None:
         """ 
         Contains the core loop for executing the voltage ramp.

@@ -1,4 +1,4 @@
-# ti_config.py
+# ti_config.py (MODIFIED)
 
 import json
 import logging
@@ -6,10 +6,12 @@ import copy
 from typing import Dict, List, Any
 
 # Imports required for the new/modified methods
-from .drivers import AbstractWaveformGenerator, create_waveform_generator
+from .hardware import AbstractWaveformGenerator, create_waveform_generator
 from .core.electrode import Electrode, ElectrodePair
 from .core.channel import TIChannel
 from .core.system import TISystem
+# --- NEW IMPORT ---
+from .hardware.hardware_manager import HardwareManager
 
 # --- Define the module-level logger ---
 logger = logging.getLogger(__name__)
@@ -20,7 +22,8 @@ class TIConfig:
     Acts as a factory for TISystem objects based on the loaded config.
     
     MODIFIED: This class now instantiates all dependent objects,
-    including TIChannels, and injects them into the TISystem.
+    including the HardwareManager, TIChannels, and injects them
+    into the TISystem.
     """
     def __init__(self, config_path: str = 'ti_config.json'):
         """
@@ -329,10 +332,9 @@ class TIConfig:
         """
         Parses the loaded configuration and instantiates TISystem objects.
 
-        MODIFICATION: This method now fully adopts the Factory pattern.
-        It instantiates the waveform generators, electrode pairs, AND
-        TIChannel objects, injecting them into the TISystem constructor.
-        This requires a corresponding change to the TISystem.__init__ method.
+        MODIFICATION: This method now instantiates the HardwareManager
+        and injects it into all TISystem and TIChannel objects,
+        conforming to the new HAL architecture.
 
         Returns:
             Dict[str, TISystem]: A dictionary of initialized TISystem objects,
@@ -341,61 +343,58 @@ class TIConfig:
         Raises:
             ValueError: If a referenced electrode_id is not found,
                         if a 'waveform_generator' is not specified for a channel,
-                        if channels in the same system reference different generators,
-                        if a referenced generator instance is not found,
                         or if 'ch1' or 'ch2' configs are missing.
         """
         systems_dict: Dict[str, TISystem] = {}
         
         # 1. Initialize all hardware instances defined in the config
+        #    This is unchanged and correct.
         initialized_generators: Dict[str, AbstractWaveformGenerator] = self._initialize_waveform_generators()
+
+        # 2. NEW: Create the single, universal HardwareManager (HAL)
+        #    This manager is injected into all systems and channels.
+        hw_manager = HardwareManager(drivers=initialized_generators)
 
         hardware_config: Dict[str, Any] = self.config.get('hardware', {})
         
-        # 2. Create a lookup map for quick access to electrode data by ID.
+        # 3. Create a lookup map for quick access to electrode data by ID. (Unchanged)
         electrode_map: Dict[int, Dict] = {
             e['id']: e for e in hardware_config.get('electrodes', [])
         }
         
         ti_systems_config: Dict[str, Any] = hardware_config.get('ti_systems', {})
 
-        # 3. Iterate over each defined TI system (e.g., ti_A, ti_B).
+        # 4. Iterate over each defined TI system (e.g., ti_A, ti_B). (Unchanged)
         for system_key, system_details in ti_systems_config.items():
             region: str = system_details.get('target', 'Unknown Region')
             channels_config: Dict[str, Any] = system_details.get('channels', {})
             
-            # 4. Determine which single waveform generator this system uses
-            #    (Validation logic is unchanged, 'ch1' presence is guaranteed by _validate_config)
             channels_dict: Dict[str, TIChannel] = {}
-            generator_id_for_system: str | None = None
+
+            # 5. Iterate over channels to create TIChannel instances
             for channel_key, channel_config in channels_config.items():
-                wavegen_channel_id = channel_config.get('waveform_generator_channel')
-                current_wg_id = channel_config.get('waveform_generator')
                 
-                if current_wg_id is None:
+                # 6. Get config data for this channel
+                wavegen_channel_id = channel_config.get('waveform_generator_channel')
+                driver_id_for_channel = channel_config.get('waveform_generator')
+                
+                if driver_id_for_channel is None:
                     raise ValueError(f"Channel '{channel_key}' in system '{system_key}' is missing required key 'waveform_generator'.")
                 
-                # 5. Retrieve the initialized hardware instance for this channel
-                try:
-                    wg_instance = initialized_generators[current_wg_id]
-                except KeyError:
-                    raise ValueError(f"Configuration error: Waveform generator '{generator_id_for_system}' (used by system '{system_key}') is not defined in 'hardware.waveform_generators'.")
-            
-                #    is guaranteed by _validate_config)
-                # 7. Create Electrode Pairs using the helper
+                # 7. Create Electrode Pairs using the helper (Unchanged)
                 pair = self._create_electrode_pair(channel_config, electrode_map, region, system_key, channel_key)
 
+                # 8. MODIFIED: Instantiate TIChannel using the new constructor
                 channels_dict[channel_key] = TIChannel(
                     channel_id=channel_key,
                     wavegen_channel_id=wavegen_channel_id,
                     electrode_pair=pair,
-                    waveform_generator=wg_instance,
+                    driver_id=driver_id_for_channel,  # <-- MODIFIED
+                    hw_manager=hw_manager,          # <-- MODIFIED
                     region_name=region
                 )
             
-            # 9. After creating all dependencies, create the TISystem.
-            #    This assumes TISystem.__init__ has been modified to accept
-            #    channel_1 and channel_2.
+            # 9. MODIFIED: Instantiate TISystem using the new constructor
             try:
                 ti_system = TISystem(
                     region=region,
@@ -403,7 +402,8 @@ class TIConfig:
                 )
                 systems_dict[system_key] = ti_system
             except TypeError as e:
-                logger.error(f"Failed to instantiate TISystem: {e}. Did you modify TISystem.__init__ to accept channel_1 and channel_2?")
+                # This error message is still relevant, but now for the new signature
+                logger.error(f"Failed to instantiate TISystem: {e}. Check TISystem.__init__ signature (requires region, channels, hw_manager).")
                 raise TypeError(f"TISystem constructor mismatch. See log. (Original error: {e})")
         
         return systems_dict

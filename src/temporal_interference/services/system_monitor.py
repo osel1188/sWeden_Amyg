@@ -1,4 +1,4 @@
-# system_monitor.py
+# system_monitor.py (MODIFIED)
 
 import logging
 import time
@@ -120,10 +120,10 @@ class SystemMonitor:
                     "target_voltage": channel.target_voltage,
                     "target_frequency": channel.target_frequency,
                     "ramp_duration_s": channel.ramp_duration_s,
-                    "current_voltage": channel.get_current_voltage(),
+                    "current_voltage": channel.get_current_voltage(), # Cached state
                     "electrode_pair": str(channel.pair),
-                    "wavegen_id": channel.generator.resource_id,
-                    "wavegen_channel": channel.wavegen_channel
+                    "driver_id": channel.driver_id, # MODIFIED
+                    "physical_channel": channel.wavegen_channel # MODIFIED
                 }
                 system_info[channel_key] = channel_info
             all_info[system_key] = system_info

@@ -24,7 +24,7 @@ UPDATE_INTERVAL_MS = 250  # Poll controller 4 times per second (4Hz)
 # --- End assumptions ---
 
 
-class RunExperimentWidget(QWidget):
+class RunStimulationWidget(QWidget):
     """
     This widget contains the entire 'Run Experiment' view,
     including its own plots, buttons, and update timer.
@@ -68,7 +68,7 @@ class RunExperimentWidget(QWidget):
         self.update_timer.start(UPDATE_INTERVAL_MS)
         # --- END MODIFICATION ---
 
-        logging.info("RunExperimentWidget initialized.")
+        logging.info("RunStimulationWidget initialized.")
 
     # --- MODIFIED: Replaces _discover_and_build_map ---
     def _discover_channels(self):
@@ -376,7 +376,7 @@ class RunExperimentWidget(QWidget):
         Called when the widget is shown (e.g., QStackedWidget switches to it).
         Starts the update timer.
         """
-        logging.info("RunExperimentWidget shown.")        
+        logging.info("RunStimulationWidget shown.")        
         super().showEvent(event)
 
     def hideEvent(self, event):
@@ -384,7 +384,7 @@ class RunExperimentWidget(QWidget):
         Called when the widget is hidden (e.g., QStackedWidget switches away).
         Stops the update timer.
         """
-        logging.info("RunExperimentWidget hidden.")
+        logging.info("RunStimulationWidget hidden.")
         super().hideEvent(event)
 
     # --- Controller Slots ---
