@@ -6,10 +6,10 @@ import copy
 from typing import Dict, List, Any
 
 # Imports required for the new/modified methods
-from .waveform_generators import AbstractWaveformGenerator, create_waveform_generator
-from .electrode import Electrode, ElectrodePair
-from .ti_channel import TIChannel
-from .ti_system import TISystem
+from .drivers import AbstractWaveformGenerator, create_waveform_generator
+from .core.electrode import Electrode, ElectrodePair
+from .core.channel import TIChannel
+from .core.system import TISystem
 
 # --- Define the module-level logger ---
 logger = logging.getLogger(__name__)

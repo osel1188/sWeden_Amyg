@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFont
 
 # Import controller and API classes for type hinting
-from temporal_interference.ti_api import TIAPI
+from temporal_interference.api import TIAPI
 from participant import ParticipantAssignerAPI
 
 # --- Import Page Modules ---

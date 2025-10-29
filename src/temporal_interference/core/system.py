@@ -13,8 +13,8 @@ from typing import List, Callable, Tuple, Optional, Dict
 import numpy as np
 
 # Local imports (assumed)
-from .ti_channel import TIChannel
-from .waveform_generators.waveform_generator import (
+from .channel import TIChannel
+from ..drivers.waveform_generator import (
     OutputState
 )
 

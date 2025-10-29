@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, call
 import pyvisa
 
 # Import the class and enums to be tested
-from temporal_interference.waveform_generators.keysight_edu33212A import KeysightEDU33212A, OutputState, WaveformShape
+from temporal_interference.drivers.keysight_edu33212A import KeysightEDU33212A, OutputState, WaveformShape
 
 # A constant for the resource ID used in tests
 DUMMY_RESOURCE_ID = "TCPIP::DUMMY::INSTR"

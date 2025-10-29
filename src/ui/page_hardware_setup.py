@@ -11,7 +11,7 @@ from PySide6.QtCore import Slot, Qt, QTimer
 from PySide6.QtGui import QFont
 
 # Import controller and page for type hinting
-from temporal_interference.ti_api import TIAPI
+from temporal_interference.api import TIAPI
 from participant import ParticipantAssignerAPI
 
 class HardwareSetupWidget(QWidget):

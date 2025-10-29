@@ -1,7 +1,7 @@
 # test_electrodes.py
 
 import pytest
-from temporal_interference.electrode import Electrode, ElectrodeGroup
+from temporal_interference.core.electrode import Electrode, ElectrodeGroup
 
 @pytest.fixture
 def sample_electrodes():

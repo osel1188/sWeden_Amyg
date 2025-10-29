@@ -4,7 +4,7 @@ from typing import  Callable
 
 # Local imports (assumed)
 from .electrode import ElectrodePair
-from .waveform_generators.waveform_generator import (
+from ..drivers.waveform_generator import (
     AbstractWaveformGenerator,
     WaveformShape,
     OutputState
