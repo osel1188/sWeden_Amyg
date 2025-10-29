@@ -20,7 +20,7 @@ from participant import ParticipantAssignerAPI
 from .page_participant_info import ParticipantInfoWidget
 from .page_hardware_setup import HardwareSetupWidget
 from .page_set_amplitudes import SetAmplitudesWidget
-from .page_run_protocol import RunStimulationWidget
+from .page_run_protocol import RunProtocolWidget
 
 class ExperimentWindow(QMainWindow):
     """
@@ -46,7 +46,7 @@ class ExperimentWindow(QMainWindow):
         self.page_amplitudes = SetAmplitudesWidget(self.ti_api)
         
         # Pass the TI controller to the run page
-        self.page_run = RunStimulationWidget(self.ti_api)
+        self.page_run = RunProtocolWidget(self.ti_api)
         
         self.nav_buttons = [] # To manage styling
 
