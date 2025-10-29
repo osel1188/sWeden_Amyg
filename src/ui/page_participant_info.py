@@ -128,6 +128,9 @@ class ParticipantInfoWidget(QWidget):
         """Connect UI signals to their slots."""
         self.available_combo.currentTextChanged.connect(self.on_combo_select)
         self.validate_button.clicked.connect(self.on_validate)
+        # --- MODIFICATION: Connect Enter key in ID input to validate ---
+        self.id_input.returnPressed.connect(self.on_validate)
+        # --- END MODIFICATION ---
 
     def populate_available_participants(self):
         """Fetches and populates the dropdown with non-participated IDs."""
@@ -176,7 +179,7 @@ class ParticipantInfoWidget(QWidget):
     @Slot()
     def on_validate(self):
         """
-        Slot triggered by the 'Validate' button.
+        Slot triggered by the 'Validate' button or Enter key.
         Calls the API to process the participant.
         """
         participant_id = self.id_input.text().strip()
