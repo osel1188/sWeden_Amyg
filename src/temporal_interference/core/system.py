@@ -4,6 +4,7 @@ import logging
 import sys
 import time
 import threading
+import concurrent.futures  # --- NEW ---
 from enum import Enum, auto
 from typing import List, Callable, Tuple, Optional, Dict
 import numpy as np
@@ -94,16 +95,18 @@ class TISystem:
     @property
     def hardware_state(self) -> TISystemHardwareState:
         """
-        Queries the actual hardware state by checking device amplitudes.
+        Queries the *cached* hardware state by checking channel voltages.
         Returns RUNNING if any channel voltage is non-zero, IDLE otherwise.
-        This performs live I/O via the HardwareManager.
+        This operation is fast and does NOT perform live I/O, preventing
+        lock contention with active ramps.
         """
-        # Note: This checks the *actual* hardware via the manager,
-        # not the TIChannel's cached `_current_voltage` state.
+        # Note: This checks the TIChannel's cached `_current_voltage` state,
+        # which is updated by the ramp loop.
         try:
             for channel in self.channels.values():
-                # Use a small tolerance for floating point comparison, as the system always put 2mV as minimum
-                if 0.03 < abs(channel.get_amplitude()):
+                # Use a small tolerance for floating point comparison.
+                # Use get_current_voltage() for the cached state.
+                if 0.03 < abs(channel.get_current_voltage()):
                     return TISystemHardwareState.RUNNING
                     
             # All channels must be at 0.0
@@ -111,8 +114,8 @@ class TISystem:
             
         except Exception as e:
             # Log the error and report an ERROR state
-            logger.error(f"Failed to query hardware state for {self.region}: {e}", exc_info=True)
-            self._status_update_func(f"Failed to get hardware state: {e}", "error")
+            logger.error(f"Failed to query cached hardware state for {self.region}: {e}", exc_info=True)
+            self._status_update_func(f"Failed to get cached hardware state: {e}", "error")
             return TISystemHardwareState.ERROR
 
     # --- is_running (Unchanged) ---
@@ -241,9 +244,18 @@ class TISystem:
     def _threaded_start_task(self) -> None:
         """[THREAD-TARGET] Contains the blocking logic for setup and ramp-up."""
         try:
-            # 1. Configure hardware
-            for channel in self.channels.values():
-                channel.set_output_state(OutputState.ON)
+            # 1. Configure hardware (MODIFIED: Concurrent)
+            num_channels = len(self.channels)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_channels) as executor:
+                futures = [
+                    executor.submit(channel.set_output_state, OutputState.ON)
+                    for channel in self.channels.values()
+                ]
+                # Wait for all outputs to be enabled
+                concurrent.futures.wait(futures)
+                # Check for exceptions
+                for future in futures:
+                    future.result() # This will re-raise any exceptions
             
             # 2. Ramp up to target voltages
             target_voltages_for_ramp = {
@@ -310,11 +322,20 @@ class TISystem:
             }
             self.ramp(target_voltages_for_ramp, ramp_durations)
             
-            # 2. Ensure outputs are off
+            # 2. Ensure outputs are off (MODIFIED: Concurrent)
             if not self._stop_event.is_set():
-                for channel in self.channels.values():
-                    channel.set_output_state(OutputState.OFF)
-                    
+                num_channels = len(self.channels)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=num_channels) as executor:
+                    futures = [
+                        executor.submit(channel.set_output_state, OutputState.OFF)
+                        for channel in self.channels.values()
+                    ]
+                    # Wait for all outputs to be disabled
+                    concurrent.futures.wait(futures)
+                    # Check for exceptions
+                    for future in futures:
+                        future.result() # Re-raises exceptions
+                        
                 self._status_update_func(f"System {self.region} stopped.", "success")
                 with self._state_lock:
                     self._logic_state = TISystemLogicState.IDLE
@@ -468,8 +489,19 @@ class TISystem:
         logger.warning(f"EMERGENCY STOP triggered for {self.region}")
         
         try:
-            for channel in self.channels.values():
-                channel.immediate_stop()
+            # MODIFICATION: Use a concurrent stop for speed
+            num_channels = len(self.channels)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_channels) as executor:
+                futures = [
+                    executor.submit(channel.immediate_stop)
+                    for channel in self.channels.values()
+                ]
+                concurrent.futures.wait(futures)
+                # Log exceptions but don't re-raise; stop must not fail
+                for future in futures:
+                    if future.exception():
+                        logger.error(f"Error during channel immediate_stop: {future.exception()}")
+            
         except Exception as e:
             logger.error(f"Error during emergency stop for {self.region}: {e}", exc_info=True)
             self._status_update_func(f"Critical error during e-stop {self.region}: {e}", "error")
@@ -546,9 +578,10 @@ class TISystem:
             raise
             
     def _execute_ramp(self, trajectories: Dict[str, np.ndarray], num_steps_total: int, time_step_s: float) -> None:
-        """ 
+        """     
         Contains the core loop for executing the voltage ramp.
-        This method is interruptible by _stop_event.
+        This method is interruptible by _stop_event and now uses a
+        ThreadPoolExecutor to set all channel voltages concurrently.
         """
         
         # Pre-calculate trajectory lengths
@@ -556,20 +589,24 @@ class TISystem:
         
         start_time = time.time()
         time_step_s = max(0.0, time_step_s) 
+        
+        num_channels = len(self.channels)
+        
+        # Create the executor once, outside the loop, for efficiency
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_channels) as executor:
+            try:
+                for i in range(num_steps_total):
+                    
+                    # 1. Check for stop signal
+                    if self._stop_event.is_set():
+                        self._status_update_func("Ramp interrupted by stop event.", "warning")
+                        logger.warning(f"{self.region}: Ramp interrupted by stop event.")
+                        break
 
-        try:
-            for i in range(num_steps_total):
-                
-                # 1. Check for stop signal
-                if self._stop_event.is_set():
-                    self._status_update_func("Ramp interrupted by stop event.", "warning")
-                    logger.warning(f"{self.region}: Ramp interrupted by stop event.")
-                    break
-
-                step_start_time = time.perf_counter()
-                
-                try:
-                    # 2. --- Hardware Interaction via Channel ---
+                    step_start_time = time.perf_counter()
+                    
+                    # 2. --- Concurrent Hardware Interaction via Channel ---
+                    futures = []
                     for key, channel in self.channels.items():
                         traj = trajectories[key]
                         num_steps_ch = traj_lengths[key]
@@ -578,71 +615,84 @@ class TISystem:
                         # If ramp is shorter, hold final value.
                         v = traj[i] if i < num_steps_ch else traj[-1]
                         
-                        channel.set_amplitude(v)
-                    # ----------------------------------------
+                        # Submit the I/O task to the thread pool
+                        futures.append(executor.submit(channel.set_amplitude, v))
+                    
+                    # Wait for all I/O in this step to complete
+                    done, not_done = concurrent.futures.wait(futures)
+                    
+                    # Check for exceptions from the I/O tasks
+                    for future in done:
+                        if future.exception():
+                            # If any I/O call failed, raise it
+                            raise future.exception()
+                    # ----------------------------------------------------
 
-                except Exception as e:
-                    logger.error(f"Error setting voltage during step {i}: {e}", exc_info=True)
-                    self._status_update_func(f"Hardware Error setting voltage: {e}", "error")
-                    self.emergency_stop()
-                    return
+                    # 3. --- Progress Reporting (Decoupled) ---
+                    progress = (i + 1) / num_steps_total * 100
+                    if self._progress_callback:
+                        try:
+                            self._progress_callback(self.region, progress)
+                        except Exception as e:
+                            logger.warning(f"Progress callback for {self.region} failed: {e}")
 
-                # 3. --- Progress Reporting (Decoupled) ---
-                progress = (i + 1) / num_steps_total * 100
-                if self._progress_callback:
-                    try:
-                        self._progress_callback(self.region, progress)
-                    except Exception as e:
-                        logger.warning(f"Progress callback for {self.region} failed: {e}")
+                    # 4. --- Timing ---
+                    if time_step_s > 0:
+                        elapsed_step = time.perf_counter() - step_start_time
+                        sleep_time = max(0, time_step_s - elapsed_step)
+                        time.sleep(sleep_time)
 
-                # 4. --- Timing ---
-                if time_step_s > 0:
-                    elapsed_step = time.perf_counter() - step_start_time
-                    sleep_time = max(0, time_step_s - elapsed_step)
-                    time.sleep(sleep_time)
+                # --- Final Step (No system lock) ---
+                if not self._stop_event.is_set():
+                    final_voltages_str_list = []
+                    
+                    # Report 100% completion
+                    if self._progress_callback:
+                        self._progress_callback(self.region, 100.0)
 
-            # --- Final Step (No system lock) ---
-            if not self._stop_event.is_set():
-                final_voltages_str_list = []
-                
-                # Report 100% completion
-                if self._progress_callback:
-                    self._progress_callback(self.region, 100.0)
-
-                try:
-                    # Set final voltages directly to ensure accuracy
+                    # Set final voltages directly to ensure accuracy (concurrently)
+                    futures = []
                     for key, channel in self.channels.items():
                         final_v = trajectories[key][-1]
-                        channel.set_amplitude(final_v)
+                        futures.append(executor.submit(channel.set_amplitude, final_v))
+                    
+                    # Wait for final set
+                    concurrent.futures.wait(futures)
+                    
+                    # Check for exceptions and build report string
+                    for future, (key, channel) in zip(futures, self.channels.items()):
+                        if future.exception():
+                            raise future.exception()
                         
                         final_voltages_str_list.append(
                              f"{key}: {channel.get_current_voltage():.2f}V"
                         )
-                    
+                        
                     final_voltages_str = ", ".join(final_voltages_str_list)
                     logger.info(f"{self.region}: Ramp finished in {time.time() - start_time:.2f}s. Final Voltages: [{final_voltages_str}]")
                     self._status_update_func(f"Ramp finished. Voltages: [{final_voltages_str}]", "success")
 
-                except Exception as e:
-                    logger.error(f"Error setting final voltage: {e}", exc_info=True)
-                    self._status_update_func(f"Hardware Error setting final voltage: {e}", "error")
-                    self.emergency_stop()
-                    return
+                else: 
+                    # Ramp was stopped prematurely
+                    current_voltages_str_list = []
+                    for key, channel in self.channels.items():
+                        current_voltages_str_list.append(
+                            f"{key}: {channel.get_current_voltage():.2f}V"
+                        )
+                    
+                    current_voltages_str = ", ".join(current_voltages_str_list)
+                    self._status_update_func(f"Ramp stopped prematurely. Current Voltages: [{current_voltages_str}]", "warning")
+                    logger.warning(f"{self.region}: Ramp stopped prematurely. Voltages left at: [{current_voltages_str}]")
 
-            else: 
-                # Ramp was stopped prematurely
-                current_voltages_str_list = []
-                for key, channel in self.channels.items():
-                    current_voltages_str_list.append(
-                        f"{key}: {channel.get_current_voltage():.2f}V"
-                    )
-                
-                current_voltages_str = ", ".join(current_voltages_str_list)
-                self._status_update_func(f"Ramp stopped prematurely. Current Voltages: [{current_voltages_str}]", "warning")
-                logger.warning(f"{self.region}: Ramp stopped prematurely. Voltages left at: [{current_voltages_str}]")
-
-        finally:
-            # Clear console line if default callback was used
-            if self._progress_callback == self._default_progress_update:
-                sys.stdout.write('\r\033[K')
-                sys.stdout.flush()
+            except Exception as e:
+                # Catch exceptions from I/O (raised from futures) or other errors
+                logger.error(f"Error setting voltage during step {i}: {e}", exc_info=True)
+                self._status_update_func(f"Hardware Error setting voltage: {e}", "error")
+                self.emergency_stop()
+                return
+            
+            finally:
+                # Clear console line if default callback was used
+                if self._progress_callback == self._default_progress_update:
+                    sys.stdout.write('\r\033[K')
+                    sys.stdout.flush()
