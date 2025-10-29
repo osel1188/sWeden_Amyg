@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QFont, QPalette
 
 # Import the controller *class* for type hinting
-from temporal_interference.ti_api import TIAPI
+from temporal_interference.api import TIAPI
 
 # --- Hard-coded assumptions ---
 PLOT_POINTS = 200  # Number of data points to show on the plots

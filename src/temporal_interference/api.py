@@ -7,8 +7,8 @@ import logging
 from typing import Optional, Tuple, Any, Dict, List, Set
 
 # Assuming ti_manager and ti_system are accessible
-from temporal_interference.ti_manager import TIManager
-from temporal_interference.ti_system import TISystemHardwareState, TISystemLogicState
+from temporal_interference.services.manager import TIManager
+from temporal_interference.core.system import TISystemHardwareState, TISystemLogicState
 
 
 class TIAPI:

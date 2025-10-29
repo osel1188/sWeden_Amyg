@@ -13,8 +13,8 @@ import traceback
 from PySide6.QtWidgets import QApplication
 
 # Assuming ti_manager, ti_api, and ti_gui are in the correct Python path
-from temporal_interference.ti_manager import TIManager
-from temporal_interference.ti_api import TIAPI
+from temporal_interference.services.manager import TIManager
+from temporal_interference.api import TIAPI
 from ui.main_window import ExperimentWindow  # Import the GUI window
 
 # NEW: Import participant API and related errors

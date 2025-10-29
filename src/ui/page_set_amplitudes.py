@@ -12,7 +12,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt, Slot, QSize, QTimer
 
 # Import API for type hinting
-from temporal_interference.ti_api import TIAPI
+from temporal_interference.api import TIAPI
 
 class _ChannelControlWidget(QFrame):
     # ... (content unchanged) ...

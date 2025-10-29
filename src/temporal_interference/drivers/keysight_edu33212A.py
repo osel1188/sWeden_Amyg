@@ -1,5 +1,5 @@
 # --- Conditional VISA Import ---
-from .config import USE_MOCK
+from .mockup_config import USE_MOCK
 
 if USE_MOCK:
     # Use the local mock_visa module
