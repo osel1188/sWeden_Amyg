@@ -18,10 +18,19 @@ from PySide6.QtGui import QFont, QPalette
 # Import the controller *class* for type hinting
 from temporal_interference.api import TIAPI
 
+# --- MODIFIED: Import the shared widget ---
+from .flexible_spinbox import FlexibleDoubleSpinBox
+# --- END MODIFIED ---
+
 # --- Hard-coded assumptions ---
 PLOT_POINTS = 200  # Number of data points to show on the plots
 UPDATE_INTERVAL_MS = 250  # Poll controller 4 times per second (4Hz)
 # --- End assumptions ---
+
+
+# --- MODIFIED: Removed old FlexibleDoubleSpinBox class ---
+# (The old class definition from lines 28-48 was removed)
+# --- END MODIFIED ---
 
 
 class RunProtocolWidget(QWidget):
@@ -229,10 +238,14 @@ class RunProtocolWidget(QWidget):
         self.adv_channel_combo = QComboBox()
         self.adv_channel_combo.setMinimumWidth(180)
         
-        self.adv_voltage_spinbox = QDoubleSpinBox()
+        # --- MODIFIED: Use new FlexibleDoubleSpinBox class ---
+        self.adv_voltage_spinbox = FlexibleDoubleSpinBox()
+        # --- END MODIFIED ---
         self.adv_voltage_spinbox.setDecimals(2)
-        self.adv_voltage_spinbox.setRange(0.0, 20.0) # Example range
-        self.adv_voltage_spinbox.setSingleStep(0.05)
+        self.adv_voltage_spinbox.setRange(0.0, 8.0)
+        # --- MODIFIED: Changed single step to 0.1 ---
+        self.adv_voltage_spinbox.setSingleStep(0.1)
+        # --- END MODIFIED ---
         self.adv_voltage_spinbox.setValue(0.0)
         self.adv_voltage_spinbox.setSuffix(" V")
         self.adv_voltage_spinbox.setMinimumWidth(100)
