@@ -8,11 +8,21 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QSpacerItem, QSizePolicy, QDoubleSpinBox,
     QPushButton, QHBoxLayout, QScrollArea, QFrame
 )
-from PySide6.QtGui import QFont
-from PySide6.QtCore import Qt, Slot, QSize, QTimer
+# MODIFIED: Import QValidator, QLocale, and QKeyEvent
+from PySide6.QtGui import QFont, QValidator, QKeyEvent
+from PySide6.QtCore import Qt, Slot, QSize, QTimer, QLocale
 
 # Import API for type hinting
 from temporal_interference.api import TIAPI
+
+# --- MODIFIED: Import the shared widget ---
+from .flexible_spinbox import FlexibleDoubleSpinBox
+# --- END MODIFIED ---
+
+# --- MODIFIED CLASS: Removed _FlexibleDoubleSpinBox ---
+# (The old class definition from lines 19-75 was removed)
+# --- END MODIFIED CLASS ---
+
 
 class _ChannelControlWidget(QFrame):
     # ... (content unchanged) ...
@@ -41,10 +51,15 @@ class _ChannelControlWidget(QFrame):
         current_label_text = QLabel("Current:")
         current_label_text.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         
-        self.spinbox = QDoubleSpinBox()
+        # --- MODIFICATION 1: Use new class ---
+        self.spinbox = FlexibleDoubleSpinBox()
+        
         self.spinbox.setDecimals(2)
-        self.spinbox.setRange(0.0, 20.0) # Example range: 0-20 V
-        self.spinbox.setSingleStep(0.05)
+        self.spinbox.setRange(0.0, 8.0) # Example range: 0-8 V
+        
+        # --- MODIFICATION 2: Change single step ---
+        self.spinbox.setSingleStep(0.1) # Was 0.05
+        
         self.spinbox.setValue(0.0)
         self.spinbox.setSuffix(" V")
         self.spinbox.setFixedSize(120, 32)
