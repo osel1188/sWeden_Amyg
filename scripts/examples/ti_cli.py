@@ -7,8 +7,8 @@ import logging
 import traceback
 
 # Assuming ti_manager and its dependencies are in the correct Python path
-from temporal_interference.ti_manager import TIManager
-from temporal_interference.ti_api import TIAPI # Import the new controller layer
+from temporal_interference.services.manager import TIManager
+from temporal_interference.api import TIAPI # Import the new controller layer
 from ui.shell_cli import TIShell
 
 def main():

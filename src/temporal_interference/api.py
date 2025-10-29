@@ -7,8 +7,8 @@ import logging
 from typing import Optional, Tuple, Any, Dict, List, Set
 
 # Assuming ti_manager and ti_system are accessible
-from temporal_interference.ti_manager import TIManager
-from temporal_interference.ti_system import TISystemState
+from temporal_interference.services.manager import TIManager
+from temporal_interference.core.system import TISystemHardwareState, TISystemLogicState
 
 
 class TIAPI:
@@ -129,13 +129,13 @@ class TIAPI:
             logging.error(f"Error getting status: {e}", exc_info=True)
             return (False, f"An unexpected error occurred: {e}")
 
-    # --- MODIFICATION: NEW DIGESTIBLE GETTERS ---
+    # --- NEW DIGESTIBLE GETTERS ---
 
     def get_overall_status(self) -> Tuple[bool, str]:
         """
         Gets a single, high-level aggregated status for all systems.
         Possible return values: IDLE, ERROR, MIXED, or a specific
-        TISystemState name if all systems are in that state.
+        TISystemLogicState name if all systems are in that state.
         
         Returns: (success, status_string)
         """
@@ -144,9 +144,9 @@ class TIAPI:
             if not systems:
                 return (True, "IDLE")
 
-            unique_states: Set[TISystemState] = {s.state for s in systems}
+            unique_states: Set[TISystemLogicState] = {s.logic_state for s in systems}
             
-            if TISystemState.ERROR in unique_states:
+            if TISystemLogicState.ERROR in unique_states:
                 return (True, "ERROR")
             
             if len(unique_states) > 1:
@@ -169,7 +169,7 @@ class TIAPI:
         """
         try:
             state_map = {
-                key: system.state.name
+                key: system.hardware_state.name
                 for key, system in self.manager.ti_systems.items()
             }
             return (True, state_map)
@@ -250,7 +250,6 @@ class TIAPI:
             logging.error(f"Error in set_target_v: {e}", exc_info=True)
             return (False, f"An unexpected error occurred: {e}")
 
-    # --- NEW METHOD AS REQUESTED ---
     def get_channel_target_voltage(self, system_key: str, channel_key: str) -> Tuple[bool, Any]:
         """
         Gets the configured target voltage parameter for a single channel.
@@ -287,7 +286,7 @@ class TIAPI:
             logging.error(f"Error while waiting for ramps: {e}", exc_info=True)
             return (False, f"An unexpected error occurred while waiting: {e}")
 
-    def check_state(self, state_name: str) -> Tuple[bool, Any]:
+    def check_hardware_state(self, state_name: str) -> Tuple[bool, Any]:
         """
         Checks if all systems are in the specified state.
         Returns: (success, data_or_message)
@@ -297,11 +296,11 @@ class TIAPI:
             return (False, "Error: A state name is required.")
         
         try:
-            target_state = TISystemState[state_name]
+            target_state = TISystemHardwareState[state_name]
             result = self.manager.check_all_systems_state(target_state)
             return (True, result)
         except KeyError:
-            valid_states = ", ".join([s.name for s in TISystemState])
+            valid_states = ", ".join([s.name for s in TISystemHardwareState])
             return (False, f"Error: Invalid state '{state_name}'. Valid states are: {valid_states}")
         except Exception as e:
             logging.error(f"Error checking state: {e}", exc_info=True)
@@ -314,7 +313,7 @@ class TIAPI:
         """
         try:
             # Check if already idle
-            is_idle = self.manager.check_all_systems_state(TISystemState.IDLE)
+            is_idle = self.manager.check_all_systems_state(TISystemHardwareState.IDLE)
             
             if not is_idle:
                 logging.warning("Systems not IDLE. Issuing graceful stop...")

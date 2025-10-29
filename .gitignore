@@ -6,6 +6,7 @@ testerss.py
 *.xlsx
 *.xlsx
 cfg/participant_conditions_path.txt
+MOCK_DEVICE_ENABLED
 
 # Distribution / packaging
 build/
@@ -13,3 +14,11 @@ dist/
 src/sweden-amyg
 *.egg-info/
 *.egg
+
+
+# temporary
+src_bckp/*
+src_bckp copy/*
+ti_gui.log
+.vscode/launch.json
+/TILA_DATA_API_TEST

@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QFont, QPalette
 
 # Import the controller *class* for type hinting
-from temporal_interference.ti_api import TIAPI
+from temporal_interference.api import TIAPI
 
 # --- Hard-coded assumptions ---
 PLOT_POINTS = 200  # Number of data points to show on the plots
@@ -24,7 +24,7 @@ UPDATE_INTERVAL_MS = 250  # Poll controller 4 times per second (4Hz)
 # --- End assumptions ---
 
 
-class RunExperimentWidget(QWidget):
+class RunProtocolWidget(QWidget):
     """
     This widget contains the entire 'Run Experiment' view,
     including its own plots, buttons, and update timer.
@@ -68,7 +68,7 @@ class RunExperimentWidget(QWidget):
         self.update_timer.start(UPDATE_INTERVAL_MS)
         # --- END MODIFICATION ---
 
-        logging.info("RunExperimentWidget initialized.")
+        logging.info("RunProtocolWidget initialized.")
 
     # --- MODIFIED: Replaces _discover_and_build_map ---
     def _discover_channels(self):
@@ -366,27 +366,17 @@ class RunExperimentWidget(QWidget):
         self.btn_start.clicked.connect(self._start_experiment)
         self.btn_stop.clicked.connect(self._stop_experiment)
         
-        # --- MODIFIED: Connect advanced controls ---
-        # self.advanced_controls_group.toggled.connect(self.adv_controls_widget.setVisible)
-        self.advanced_controls_group.toggled.connect(self._on_advanced_group_toggled) # <-- MODIFIED
+        # --- Connect advanced controls ---
+        self.advanced_controls_group.toggled.connect(self._on_advanced_group_toggled)
         self.adv_channel_combo.currentIndexChanged.connect(self._on_advanced_channel_selected)
         self.adv_update_button.clicked.connect(self._on_advanced_update)
-        # --- END MODIFIED ---
         
     def showEvent(self, event):
         """
         Called when the widget is shown (e.g., QStackedWidget switches to it).
         Starts the update timer.
         """
-        logging.info("RunExperimentWidget shown.")
-        # NOTE: A robust implementation might re-run _discover_channels
-        # here if hardware can change, but that requires clearing
-        # the plot and labels layouts first.
-        
-        # --- MODIFICATION: Timer is no longer started here. ---
-        # self.update_timer.start(UPDATE_INTERVAL_MS)
-        # --- END MODIFICATION ---
-        
+        logging.info("RunProtocolWidget shown.")        
         super().showEvent(event)
 
     def hideEvent(self, event):
@@ -394,12 +384,7 @@ class RunExperimentWidget(QWidget):
         Called when the widget is hidden (e.g., QStackedWidget switches away).
         Stops the update timer.
         """
-        logging.info("RunExperimentWidget hidden.")
-        
-        # --- MODIFICATION: Timer is no longer stopped here. ---
-        # self.update_timer.stop()
-        # --- END MODIFICATION ---
-        
+        logging.info("RunProtocolWidget hidden.")
         super().hideEvent(event)
 
     # --- Controller Slots ---
@@ -467,14 +452,11 @@ class RunExperimentWidget(QWidget):
 
     @Slot()
     def _on_advanced_update(self):
-    # --- END MODIFIED ---
         """
         Handles the 'UPDATE' button click in the advanced controls.
         Sets the target voltage parameter AND initiates a ramp.
         """
-        # --- MODIFIED: Use correct 'currentData' method ---
         key = self.adv_channel_combo.currentData()
-        # --- END MODIFIED ---
 
         if not isinstance(key, tuple) or len(key) != 2:
             logging.warning("Advanced update clicked but no valid channel is selected.")

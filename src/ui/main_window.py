@@ -13,14 +13,14 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFont
 
 # Import controller and API classes for type hinting
-from temporal_interference.ti_api import TIAPI
+from temporal_interference.api import TIAPI
 from participant import ParticipantAssignerAPI
 
 # --- Import Page Modules ---
 from .page_participant_info import ParticipantInfoWidget
 from .page_hardware_setup import HardwareSetupWidget
 from .page_set_amplitudes import SetAmplitudesWidget
-from .page_run_experiment import RunExperimentWidget
+from .page_run_protocol import RunProtocolWidget
 
 class ExperimentWindow(QMainWindow):
     """
@@ -46,7 +46,7 @@ class ExperimentWindow(QMainWindow):
         self.page_amplitudes = SetAmplitudesWidget(self.ti_api)
         
         # Pass the TI controller to the run page
-        self.page_run = RunExperimentWidget(self.ti_api)
+        self.page_run = RunProtocolWidget(self.ti_api)
         
         self.nav_buttons = [] # To manage styling
 
@@ -127,7 +127,7 @@ class ExperimentWindow(QMainWindow):
         self.nav_1 = QPushButton("PARTICIPANT INFO")
         self.nav_2 = QPushButton("HARDWARE SETUP")
         self.nav_3 = QPushButton("SET SIGNAL AMPLITUDES")
-        self.nav_4 = QPushButton("RUN EXPERIMENT")
+        self.nav_4 = QPushButton("RUN PROTOCOL")
         
         self.nav_buttons = [self.nav_1, self.nav_2, self.nav_3, self.nav_4]
         # --- END MODIFICATION ---

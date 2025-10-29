@@ -2,14 +2,13 @@
 
 from typing import List, Dict, Any, Optional
 import logging
-# --- MODIFICATION: Added imports ---
-import time
-from .ti_config import TIConfig
-from .ti_system import TISystem, TISystemState # <-- Modified import
-# --- MODIFICATION: Added import ---
-from .waveform_generators.waveform_generator import AbstractWaveformGenerator
+from ..config import TIConfig
+from ..core.system import TISystem, TISystemHardwareState
+from ..hardware.hardware_manager import HardwareManager
+from .system_monitor import SystemMonitor
+# from .async_stop_handler import AsyncStopHandler # MODIFIED: Removed
+from .trigger_manager import TriggerManager
 
-# --- Define the module-level logger ---
 logger = logging.getLogger(__name__)
 
 class TIManager:
@@ -21,125 +20,87 @@ class TIManager:
     This class is responsible for applying protocol settings (voltages, 
     frequencies) to the TISystem objects and controlling their
     lifecycle (run, stop, emergency_stop).
+    
+    It delegates hardware-specific logic (connect/disconnect, enable/disable)
+    and state monitoring (polling, waiting) to dedicated service classes.
     """
     def __init__(self, config_path: str = 'ti_config.json'):
         """
-        Initializes the TIManager.
+        Initializes the TIManager and its subordinate services.
 
         Args:
             config_path (str): The path to the JSON configuration file.
         """
         self.config_handler: TIConfig = TIConfig(config_path)
         
-        # The TIManager requests the system list from the config handler,
-        # which acts as a factory.
-        self.ti_systems: Dict[str, TISystem] = self.config_handler.get_ti_systems()
         self.protocols: Dict[str, Any] = self.config_handler.get_protocols()
         
+        self.ti_systems: Dict[str, TISystem] = self.config_handler.get_ti_systems()
+        if not self.ti_systems:
+                logger.warning("TIConfig returned no TI systems.")
+        else:
+            logger.info(f"Loaded {len(self.ti_systems)} TI system(s) from config.")
+        
         self.current_protocol_name: str | None = None
+        
+        self.monitor = SystemMonitor(self.ti_systems)
+
+        self.state_monitor = TriggerManager(
+            self.monitor, 
+            self._find_hw_manager(),
+            poll_interval_s=0.1, 
+            idle_debounce_s=10.0
+        )
+        self.state_monitor.start_monitoring()
         
         logger.info(f"TIManager initialized with {len(self.ti_systems)} TI systems from config.")
         for system_key in self.ti_systems:
             logger.info(f"  -> Found system: '{system_key}' targeting '{self.ti_systems[system_key].region}'")
 
-    # --- Hardware Connection/Disconnection Methods ---
+    # --- NEW: HardwareManager Accessor and Delegator Methods ---
 
-    def _get_all_hardware_generators(self) -> set[AbstractWaveformGenerator]:
+    def _find_hw_manager(self) -> Optional[HardwareManager]:
         """
-        Collects a set of all unique waveform generator hardware instances
-        managed by this manager's systems.
+        Retrieves the shared HardwareManager instance from the first
+        available channel.
+        
+        This relies on TIConfig injecting the *same* hw_manager
+        instance into all TIChannel objects.
         """
-        all_generators: set[AbstractWaveformGenerator] = set()
-        for system in self.ti_systems.values():
-            for channel in system.channels.values():
-                all_generators.add(channel.generator)
-        return all_generators
+        if not self.ti_systems:
+            logger.warning("_find_hw_manager: No TI systems loaded.")
+            return None
+        
+        first_system = next(iter(self.ti_systems.values()))
+        first_channel = next(iter(first_system.channels.values()))
+        return first_channel.hw_manager
+
+    # --- End Hardware Delegator Methods ---
 
     def connect_all_hardware(self) -> None:
         """
-        Connects to all unique hardware resources (waveform generators)
-        managed by this manager.
+        Connects to all unique hardware resources by delegating
+        to the HardwareManager, accessed via a TISystem.
         """
-        logger.info("Connecting to all hardware resources...")
-        hardware = self._get_all_hardware_generators()
-        
-        if not hardware:
-            logger.warning("No hardware generators found to connect.")
-            return
-
-        for i, generator in enumerate(hardware):
-            try:
-                logger.info(f"Connecting to hardware '{generator.resource_id}' ({i+1}/{len(hardware)})...")
-                generator.connect()
-                logger.info(f"Successfully connected to '{generator.resource_id}'.")
-            except Exception as e:
-                logger.error(f"Failed to connect to hardware '{generator.resource_id}': {e}", exc_info=True)
-                # Continue attempting to connect to other devices
-        
-        logger.info(f"Hardware connection attempt finished for {len(hardware)} devices.")
+        for system in self.ti_systems.values():
+            system.connect_all()
 
     def disconnect_all_hardware(self) -> None:
         """
-        Disconnects from all unique hardware resources (waveform generators)
-        managed by this manager.
+        Disconnects from all unique hardware resources by delegating
+        to the HardwareManager, accessed via a TISystem.
         """
-        logger.info("Disconnecting from all hardware resources...")
-        hardware = self._get_all_hardware_generators()
-
-        if not hardware:
-            logger.warning("No hardware generators found to disconnect.")
-            return
-
-        for i, generator in enumerate(hardware):
-            try:
-                logger.info(f"Disconnecting from hardware '{generator.resource_id}' ({i+1}/{len(hardware)})...")
-                generator.disconnect()
-                logger.info(f"Successfully disconnected from '{generator.resource_id}'.")
-            except Exception as e:
-                logger.error(f"Failed to disconnect from hardware '{generator.resource_id}': {e}", exc_info=True)
-        
-        logger.info(f"Hardware disconnection finished for {len(hardware)} devices.")
-
-    # --- End of new methods ---
-
-    def add_system(self, system: TISystem, system_key: str) -> None:
-        """Adds a pre-configured TI system to the manager."""
-        if system_key in self.ti_systems:
-            logger.warning(f"Overwriting existing system with key '{system_key}'.")
-        self.ti_systems[system_key] = system
+        for system in self.ti_systems.values():
+            system.disconnect_all()
 
     def get_system(self, system_key: str) -> TISystem:
-        """
-        Retrieves a specific TI system by its key (e.g., 'ti_A').
-
-        Args:
-            system_key (str): The key of the system to retrieve.
-
-        Returns:
-            TISystem: The requested TISystem object.
-        
-        Raises:
-            KeyError: If the system_key is not found.
-        """
         try:
             return self.ti_systems[system_key]
         except KeyError:
             logger.error(f"TI system key '{system_key}' not found.")
             raise
 
-    # --- MODIFIED: Replaces set_protocol ---
     def initialize_protocol(self, protocol_name: str) -> None:
-        """
-        Initializes all managed TI systems with settings from a named protocol.
-        This configures target frequencies, voltages, and ramp durations for
-        each channel in each system, but does not start the ramps.
-        
-        Args:
-            protocol_name (str): The name of the protocol (e.g., "STIM", "SHAM").
-            
-        Raises:
-            KeyError: If the protocol_name or a required setting is not found.
-        """
         if protocol_name not in self.protocols:
             logger.error(f"Protocol '{protocol_name}' not found in configuration.")
             raise KeyError(f"Protocol '{protocol_name}' not found.")
@@ -150,7 +111,7 @@ class TIManager:
         logger.info(f"Initializing protocol '{protocol_name}': {protocol_data.get('description', 'No description')}")
 
         try:
-            # Iterate over each system managed by this manager (e.g., "ti_A", "ti_B")
+            # Iterate over each managed system (e.g., "ti_A", "ti_B")
             for system_key, system in self.ti_systems.items():
                 if system_key not in protocol_data:
                     logger.warning(f"Protocol '{protocol_name}' has no settings for system '{system_key}'. Skipping.")
@@ -162,7 +123,7 @@ class TIManager:
                 if not channel_settings_list:
                     logger.error(f"Protocol error: System '{system_key}' has no 'channel_settings' defined.")
                     continue
-
+                
                 # Build dictionaries for the TISystem's N-channel API
                 target_voltages: Dict[str, float] = {}
                 target_frequencies: Dict[str, float] = {}
@@ -180,10 +141,10 @@ class TIManager:
                     target_frequencies[channel_key] = settings['frequency_hz']
                     ramp_durations[channel_key] = settings['ramp_duration_s']
                 
-                # Apply settings to the TISystem object using the new API
+                # Apply settings to the TISystem object
                 system.setup_target_voltage(target_voltages)
-                system.setup_frequencies(target_frequencies)
-                system.setup_ramp_durations(ramp_durations)
+                system.set_frequencies(target_frequencies)
+                system.set_ramp_durations(ramp_durations)
                 
             logger.info(f"Successfully initialized protocol '{protocol_name}' for all configured systems.")
 
@@ -196,7 +157,6 @@ class TIManager:
             self.current_protocol_name = None # Invalidate protocol on error
             raise
 
-    # --- NEW METHOD ---
     def set_channel_target_voltage(self,
                                    system_key: str,
                                    channel_key: str,
@@ -217,21 +177,21 @@ class TIManager:
         try:
             system = self.get_system(system_key)
             # TISystem.setup_target_voltage accepts a dict.
-            # We call it with a single-item dict.
             system.setup_target_voltage({channel_key: target_voltage})
             logger.info(f"Set target voltage parameter for '{system_key}/{channel_key}' to {target_voltage}V.")
         except KeyError:
             logger.error(f"Cannot set voltage parameter: System '{system_key}' not found.")
         except Exception as e:
             logger.error(f"Error setting target voltage for '{system_key}/{channel_key}': {e}", exc_info=True)
-    # --- END NEW METHOD ---
 
-    # --- MODIFIED: Replaces run_all_systems ---
     def start_protocol(self) -> None:
         """
-        Starts all managed TI systems based on the currently initialized protocol.
-        This will initiate the non-blocking voltage ramp-up to the target voltages
-        for all systems defined in the protocol.
+        Starts all managed TI systems based on the currently
+        initialized protocol. This initiates the non-blocking
+        voltage ramp-up for all systems.
+        
+        The TriggerManager will detect the resulting
+        IDLE -> RUNNING state change and enable hardware.
         """
         if not self.current_protocol_name:
             logger.error("Cannot start protocol: No protocol has been initialized. Call initialize_protocol() first.")
@@ -239,7 +199,7 @@ class TIManager:
 
         logger.info(f"--- STARTING PROTOCOL: {self.current_protocol_name} ---")
         protocol_data = self.protocols[self.current_protocol_name]
-
+        
         for system_key, system in self.ti_systems.items():
             if system_key not in protocol_data:
                 logger.warning(f"Skipping start for '{system_key}': Not defined in current protocol.")
@@ -247,33 +207,38 @@ class TIManager:
             
             try:
                 logger.info(f"Starting system '{system_key}' (targeting {system.region})...")
-                # TISystem.start() is now parameter-less and non-blocking
+                # TISystem.start() is parameter-less and non-blocking
+                # This will trigger the state change.
                 system.start()
                 
             except Exception as e:
                 logger.error(f"An unexpected error occurred while starting system '{system_key}': {e}", exc_info=True)
                 system.emergency_stop() # Ensure safety
 
-    # --- MODIFIED: Replaces stop_all_systems ---
     def stop_protocol(self) -> None:
         """
         Stops all managed TI systems by initiating a non-blocking ramp
-        down to zero. Uses the ramp durations configured by the protocol.
+        down to zero.
+        
+        The TriggerManager will detect the resulting
+        RUNNING -> IDLE state change and secure hardware
+        after its debounce period.
         """
-        logger.info("--- STOPPING ALL SYSTEMS ---")
+        logger.info("--- STOPPING ALL SYSTEMS (Graceful ramp-down) ---")
         for system_key, system in self.ti_systems.items():
             try:
                 logger.info(f"Stopping system '{system_key}'...")
-                # TISystem.stop() is now parameter-less and non-blocking
+                # TISystem.stop() is parameter-less and non-blocking
+                # This will eventually trigger the state change to IDLE.
                 system.stop()
             except Exception as e:
                 logger.error(f"An unexpected error occurred while stopping system '{system_key}': {e}", exc_info=True)
-                system.emergency_stop() # Ensure safety
-
-    # --- NEW: Fulfills requirement (3) ---
+                system.emergency_stop() # Ensure safety        
+        
     def get_all_channel_info(self) -> Dict[str, Dict[str, Any]]:
         """
-        Retrieves detailed state information for all channels in all systems.
+        Retrieves detailed state information for all channels in all systems
+        by delegating to the SystemMonitor.
 
         Returns:
             Dict[str, Dict[str, Any]]: A nested dictionary:
@@ -283,45 +248,25 @@ class TIManager:
                 }
             }
         """
-        all_info: Dict[str, Dict[str, Any]] = {}
-        for system_key, system in self.ti_systems.items():
-            system_info: Dict[str, Any] = {}
-            for channel_key, channel in system.channels.items():
-                channel_info = {
-                    "region": system.region,
-                    "system_state": system.state.name,
-                    "is_system_ramping": system.is_ramping,
-                    "target_voltage": channel.target_voltage,
-                    "target_frequency": channel.target_frequency,
-                    "ramp_duration_s": channel.ramp_duration_s,
-                    "current_voltage": channel.get_current_voltage(),
-                    "electrode_pair": str(channel.pair),
-                    "wavegen_id": channel.generator.resource_id,
-                    "wavegen_channel": channel.wavegen_channel
-                }
-                system_info[channel_key] = channel_info
-            all_info[system_key] = system_info
-        return all_info
+        return self.monitor.get_all_channel_info()
 
-    def check_all_systems_state(self, target_state: TISystemState) -> bool:
+    def check_all_systems_state(self, target_state: TISystemHardwareState) -> bool:
         """
-        Checks if all managed TI systems are in the specified state.
+        Checks if all managed TI systems are in the specified state
+        by delegating to the SystemMonitor.
 
         Args:
-            target_state (TISystemState): The state to check for.
+            target_state (TISystemHardwareState): The state to check for.
 
         Returns:
             bool: True if all systems are in the target state, False otherwise.
         """
-        if not self.ti_systems:
-            return True  # Vacuously true if no systems are managed
-        
-        return all(system.state == target_state for system in self.ti_systems.values())
+        return self.monitor.check_all_systems_state(target_state)
 
     def wait_for_all_ramps_to_finish(self, poll_interval_s: float = 0.05, timeout_s: Optional[float] = None) -> bool:
         """
         Blocks the calling thread until all managed TISystem instances
-        are no longer ramping.
+        are no longer ramping, by delegating to the SystemMonitor.
 
         Args:
             poll_interval_s (float): The time to wait between checks.
@@ -331,25 +276,12 @@ class TIManager:
         Returns:
             bool: True if all ramps finished, False if the wait timed out.
         """
-        start_time = time.time()
-
         try:
-            while any(system.is_ramping for system in self.ti_systems.values()):
-                if timeout_s is not None:
-                    elapsed = time.time() - start_time
-                    if elapsed > timeout_s:
-                        logger.warning(f"Wait for ramps timed out after {elapsed:.2f}s.")
-                        return False
-                
-                time.sleep(poll_interval_s)
-        
+            return self.monitor.wait_for_all_ramps_to_finish(poll_interval_s, timeout_s)
         except KeyboardInterrupt:
             logger.warning("Wait for ramps interrupted by user (KeyboardInterrupt).")
             self.emergency_stop_all_systems()
             return False
-
-        logger.info("All system ramps have completed.")
-        return True
 
     def ramp_single_channel(self, 
                             system_key: str, 
@@ -383,14 +315,21 @@ class TIManager:
         except Exception as e:
             logger.error(f"An unexpected error occurred during single channel ramp: {e}", exc_info=True)
 
-
     def emergency_stop_all_systems(self) -> None:
         """
         Triggers an immediate, no-ramp emergency stop on all managed systems.
+        Each TISystem is responsible for disabling its own hardware outputs.
         """
         logger.critical("--- EMERGENCY STOP TRIGGERED FOR ALL SYSTEMS ---")
+        
+        # Command all TISystem objects to E-Stop (sets voltage to 0)
         for system_key, system in self.ti_systems.items():
             try:
                 system.emergency_stop()
             except Exception as e:
                 logger.error(f"An error occurred during emergency stop for system '{system_key}': {e}", exc_info=True)
+        
+        # E-Stop should also immediately secure hardware, bypassing the
+        # state monitor's debounce logic.
+        self.disable_all_channels()
+        self.abort()

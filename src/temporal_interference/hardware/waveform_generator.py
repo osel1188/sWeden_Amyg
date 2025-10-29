@@ -41,20 +41,11 @@ class AbstractWaveformGenerator(ABC):
     """
     
     # --- Class-level Registry for Factory Pattern ---
-    # This dictionary will map model_id strings to the class itself.
     _driver_registry: Dict[str, Type[T_Generator]] = {}
 
     def __init_subclass__(cls, *, model_id: str, **kwargs: Any) -> None:
         """
         Magic method to automatically register any subclass.
-        
-        When a new class inherits from AbstractWaveformGenerator and provides
-        a 'model_id' keyword argument in its class definition, it will be
-        automatically added to the registry.
-        
-        Example:
-            class MyDriver(AbstractWaveformGenerator, model_id="my_driver_id"):
-                ...
         """
         super().__init_subclass__(**kwargs)
         if model_id in cls._driver_registry:
@@ -65,16 +56,13 @@ class AbstractWaveformGenerator(ABC):
             )
         cls._driver_registry[model_id] = cls
         cls.model = model_id
-        # print(f"Registered driver: {model_id} -> {cls.__name__}") # Optional: for debugging
         
 
     def __init__(self, resource_id: str, **kwargs: Any) -> None:
         """
         Initializes the generator with a specific hardware resource identifier.
-        ... [rest of init method] ...
         """
         self.resource_id = resource_id
-        # Concrete implementations can handle kwargs for custom setup.
 
     # --- Factory Accessor Method (Static) ---
     
@@ -87,9 +75,6 @@ class AbstractWaveformGenerator(ABC):
     def get_driver_class(model_id: str) -> Type[T_Generator]:
         """
         Looks up and returns a driver class from the registry.
-        
-        Note: This requires the module containing the driver to have been
-        imported at least once to trigger registration.
         """
         try:
             return AbstractWaveformGenerator._driver_registry[model_id]
@@ -121,11 +106,16 @@ class AbstractWaveformGenerator(ABC):
     
     # --- Instrument Status ---
 
+    @property
+    @abstractmethod
+    def is_connected(self) -> bool:
+        """Returns True if the instrument is currently connected."""
+        pass
+
     @abstractmethod
     def get_status(self) -> Dict[str, Any]:
         """
         Returns a dictionary containing the current status of the hardware.
-        e.g., {'connection': 'active', 'channel_1_output': 'ON'}.
         """
         pass
 
@@ -134,10 +124,6 @@ class AbstractWaveformGenerator(ABC):
     def set_output_state(self, channel: int, state: OutputState) -> None:
         """
         Enables or disables a specific output channel.
-
-        Args:
-            channel (int): The channel number (e.g., 1, 2).
-            state (OutputState): The desired output state (ON or OFF).
         """
         pass
 
@@ -145,10 +131,6 @@ class AbstractWaveformGenerator(ABC):
     def set_frequency(self, channel: int, frequency: float) -> None:
         """
         Sets the frequency for a specific channel.
-
-        Args:
-            channel (int): The channel number.
-            frequency (float): The frequency in Hertz (Hz).
         """
         pass
 
@@ -156,10 +138,6 @@ class AbstractWaveformGenerator(ABC):
     def set_amplitude(self, channel: int, amplitude: float) -> None:
         """
         Sets the voltage amplitude for a specific channel.
-
-        Args:
-            channel (int): The channel number.
-            amplitude (float): The peak-to-peak voltage amplitude (Vpp).
         """
         pass
         
@@ -167,10 +145,6 @@ class AbstractWaveformGenerator(ABC):
     def set_offset(self, channel: int, offset: float) -> None:
         """
         Sets the DC voltage offset for a specific channel.
-
-        Args:
-            channel (int): The channel number.
-            offset (float): The DC offset in Volts (V).
         """
         pass
 
@@ -178,10 +152,6 @@ class AbstractWaveformGenerator(ABC):
     def set_waveform_shape(self, channel: int, shape: WaveformShape) -> None:
         """
         Sets the waveform shape for a specific channel.
-
-        Args:
-            channel (int): The channel number.
-            shape (WaveformShape): The desired waveform shape (e.g., SINE, SQUARE).
         """
         pass
 
@@ -191,12 +161,6 @@ class AbstractWaveformGenerator(ABC):
     def get_frequency(self, channel: int) -> float:
         """
         Queries the frequency of a specific channel.
-
-        Args:
-            channel (int): The channel number.
-        
-        Returns:
-            float: The frequency in Hertz (Hz).
         """
         pass
 
@@ -204,12 +168,6 @@ class AbstractWaveformGenerator(ABC):
     def get_amplitude(self, channel: int) -> float:
         """
         Queries the peak-to-peak voltage amplitude (Vpp) of a specific channel.
-
-        Args:
-            channel (int): The channel number.
-            
-        Returns:
-            float: The peak-to-peak voltage amplitude (Vpp).
         """
         pass
 
@@ -217,12 +175,6 @@ class AbstractWaveformGenerator(ABC):
     def get_offset(self, channel: int) -> float:
         """
         Queries the DC offset voltage of a specific channel.
-
-        Args:
-            channel (int): The channel number.
-            
-        Returns:
-            float: The DC offset in Volts (V).
         """
         pass
 
@@ -232,36 +184,27 @@ class AbstractWaveformGenerator(ABC):
     def initialize_device_settings(self, config: Dict[str, Any]) -> None:
         """
         Applies a dictionary of settings to the instrument.
-        
-        Args:
-            config (Dict[str, Any]): A configuration dictionary.
         """
         pass
 
     @abstractmethod
-    def set_trigger_source_bus(self, channel: int) -> None:
+    def enable_channels(self) -> None:
         """
-        Sets the trigger source to BUS (software/internal) for a specific channel.
-
-        Args:
-            channel (int): The channel number.
+        Enables the physical output state for the device channels.
         """
         pass
 
     @abstractmethod
-    def set_trigger_source_external(self, channel: int) -> None:
+    def disable_channels(self) -> None:
         """
-        Sets the trigger source to EXT (external hardware trigger) for a specific channel.
-
-        Args:
-            channel (int): The channel number.
+        Disables the physical output state for the device channels.
         """
         pass
-        
+
     @abstractmethod
-    def trigger(self) -> None:
+    def send_software_trigger(self) -> None:
         """
-        Sends a software trigger to the instrument.
+        Starts waveform generation on the device channels if the device has been set to BUS trigger.
         """
         pass
 
@@ -279,13 +222,10 @@ class AbstractWaveformGenerator(ABC):
                          shape: WaveformShape,
                          frequency: float,
                          amplitude: float,
-                         offset: float = 0.0) -> None:
+                         offset: float = 0.0,
+                         enable_output: bool = True) -> None:
         """
         A convenience method to configure and apply a standard waveform to a channel.
-
-        This default implementation calls the low-level setters sequentially.
-        Concrete classes can override this method for hardware that supports
-        atomic updates for better performance.
 
         Args:
             channel (int): The channel number.
@@ -293,9 +233,12 @@ class AbstractWaveformGenerator(ABC):
             frequency (float): The frequency in Hertz (Hz).
             amplitude (float): The voltage amplitude (Vpp).
             offset (float, optional): The DC offset in Volts (V). Defaults to 0.0.
+            enable_output (bool, optional): If True, enables the channel output
+                                            after configuration. Defaults to True.
         """
         self.set_waveform_shape(channel, shape)
         self.set_frequency(channel, frequency)
         self.set_amplitude(channel, amplitude)
         self.set_offset(channel, offset)
-        self.set_output_state(channel, OutputState.ON)
+        if enable_output:
+            self.set_output_state(channel, OutputState.ON)
