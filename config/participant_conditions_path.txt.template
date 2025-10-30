@@ -1,3 +1,4 @@
 # To use this file, please remove the .template in the filename.
+participants_list_file_path=C:\Users\....\excel_file.xlsx
 condition_file_path=C:\Users\....\excel_file.xlsx
 save_dir_base_path=C:\Users\...\experiment_folder
