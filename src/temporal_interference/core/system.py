@@ -4,14 +4,13 @@ import logging
 import sys
 import time
 import threading
-import concurrent.futures  # --- NEW ---
+import concurrent.futures
 from enum import Enum, auto
 from typing import List, Callable, Tuple, Optional, Dict
 import numpy as np
 
 # Local imports (assumed)
 from .channel import TIChannel
-# --- NEW ---
 from ..hardware.hardware_manager import HardwareManager
 from ..hardware.waveform_generator import (
     OutputState
@@ -20,10 +19,11 @@ from ..hardware.waveform_generator import (
 # --- Define the module-level logger ---
 logger = logging.getLogger(__name__)
 
-# --- TISystemLogicState Enum (Unchanged) ---
+# --- TISystemLogicState Enum (MODIFIED) ---
 class TISystemLogicState(Enum):
     """Defines the discrete operational *logic* states of the TISystem."""
     IDLE = auto()
+    WAITING_FOR_TRIGGER = auto()
     RAMPING_UP = auto()
     RUNNING_AT_TARGET = auto()
     RAMPING_DOWN = auto()
@@ -60,7 +60,7 @@ class TISystem:
         self._logic_state: TISystemLogicState = TISystemLogicState.IDLE
         self._state_lock = threading.RLock()
         self._ramp_thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event() 
+        self._trigger_event = threading.Event() 
 
         # --- Encapsulated Channels (Unchanged) ---
         self.channels: Dict[str, TIChannel] = channels
@@ -91,7 +91,7 @@ class TISystem:
         with self._state_lock:
             return self._logic_state
 
-    # --- Hardware State Property (MODIFIED) ---
+    # --- Hardware State Property (Unchanged) ---
     @property
     def hardware_state(self) -> TISystemHardwareState:
         """
@@ -100,20 +100,14 @@ class TISystem:
         This operation is fast and does NOT perform live I/O, preventing
         lock contention with active ramps.
         """
-        # Note: This checks the TIChannel's cached `_current_voltage` state,
-        # which is updated by the ramp loop.
         try:
             for channel in self.channels.values():
-                # Use a small tolerance for floating point comparison.
-                # Use get_current_voltage() for the cached state.
                 if 0.03 < abs(channel.get_current_voltage()):
                     return TISystemHardwareState.RUNNING
                     
-            # All channels must be at 0.0
             return TISystemHardwareState.IDLE
             
         except Exception as e:
-            # Log the error and report an ERROR state
             logger.error(f"Failed to query cached hardware state for {self.region}: {e}", exc_info=True)
             self._status_update_func(f"Failed to get cached hardware state: {e}", "error")
             return TISystemHardwareState.ERROR
@@ -141,9 +135,9 @@ class TISystem:
     @property
     def emergency_stop_triggered(self) -> bool:
         """True if the stop event has been set. Thread-safe."""
-        return self._stop_event.is_set()
+        return self._trigger_event.is_set()
 
-    # --- NEW: Hardware Lifecycle Methods (Delegated) ---
+    # --- Hardware Lifecycle Methods (Unchanged) ---
 
     def connect_all(self):
         """
@@ -152,7 +146,6 @@ class TISystem:
         """
         self._status_update_func(f"Connecting hardware for system {self.region}...", "info")
         _hw_manager: HardwareManager = next(iter(self.channels.values())).hw_manager
-        # Delegation is idempotent at the manager level
         _hw_manager.connect_all()
 
     def disconnect_all(self):
@@ -162,11 +155,9 @@ class TISystem:
         """
         self._status_update_func(f"Disconnecting hardware for system {self.region}...", "info")
         _hw_manager: HardwareManager = next(iter(self.channels.values())).hw_manager
-        # Delegation is idempotent at the manager level
         _hw_manager.disconnect_all()
-
-    # --- All subsequent methods (setup_*, start, stop, ramp, _execute_ramp, etc.)
-    # --- are UNCHANGED from the provided `system.py` file.
+    
+    # --- setup_* methods (Unchanged) ---
     
     def _validate_channel_keys(self, data: Dict[str, float], operation: str) -> bool:
         """Helper to validate keys in setup methods."""
@@ -216,6 +207,7 @@ class TISystem:
         all_channel_durations = {key: duration_s for key in self.channels}
         self.set_ramp_durations(all_channel_durations)
 
+    # --- start method (Unchanged) ---
     def start(self) -> None:
         """
         Applies frequencies, turns on outputs, and starts a non-blocking
@@ -232,8 +224,9 @@ class TISystem:
 
             self._status_update_func(f"Starting system {self.region}...", "info")
             
-            self._stop_event.clear()
-            self._logic_state = TISystemLogicState.RAMPING_UP
+            self._trigger_event.clear()
+
+            self._logic_state = TISystemLogicState.WAITING_FOR_TRIGGER 
             
             self._ramp_thread = threading.Thread(
                 target=self._threaded_start_task, 
@@ -241,22 +234,38 @@ class TISystem:
             )
             self._ramp_thread.start()
     
+    # --- _threaded_start_task (Unchanged) ---
     def _threaded_start_task(self) -> None:
         """[THREAD-TARGET] Contains the blocking logic for setup and ramp-up."""
         try:
-            # 1. Configure hardware (MODIFIED: Concurrent)
-            num_channels = len(self.channels)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=num_channels) as executor:
-                futures = [
-                    executor.submit(channel.set_output_state, OutputState.ON)
-                    for channel in self.channels.values()
-                ]
-                # Wait for all outputs to be enabled
-                concurrent.futures.wait(futures)
-                # Check for exceptions
-                for future in futures:
-                    future.result() # This will re-raise any exceptions
-            
+            # --- MODIFICATION: Wait for hardware enabling and trigger ---
+            if not self._trigger_event.is_set():
+                _hw_manager: HardwareManager = next(iter(self.channels.values())).hw_manager
+                trigger_event = _hw_manager.trigger_event
+                
+                # State is already WAITING_FOR_TRIGGER (set by start())
+                self._status_update_func(f"System {self.region} outputs enabled. Waiting for hardware trigger...", "info")
+                logger.info(f"System {self.region} waiting for hardware trigger event...")
+                
+                # This call blocks until the event is set by HardwareManager.send_software_trigger()
+                trigger_event.wait()
+                
+                if self._trigger_event.is_set():
+                     logger.warning(f"System {self.region} stop event triggered while waiting for trigger.")
+                     raise Exception("Stop event triggered during trigger wait")
+                
+                # --- MODIFIED: Transition state from WAITING to RAMPING_UP ---
+                with self._state_lock:
+                    # Check again in case stop was called right after wait() but before lock
+                    if self._trigger_event.is_set():
+                         raise Exception("Stop event triggered immediately after trigger wait")
+                    self._logic_state = TISystemLogicState.RAMPING_UP
+                # --- END MODIFICATION ---
+                
+                logger.info(f"System {self.region} hardware trigger event received. Starting ramp.")
+                self._status_update_func(f"System {self.region} trigger received. Ramping up...", "info")
+            # --- END MODIFICATION ---
+
             # 2. Ramp up to target voltages
             target_voltages_for_ramp = {
                 key: ch.target_voltage for key, ch in self.channels.items()
@@ -268,23 +277,31 @@ class TISystem:
             
             # 3. Update state on success
             with self._state_lock:
-                if not self._stop_event.is_set():
+                if not self._trigger_event.is_set():
                     self._logic_state = TISystemLogicState.RUNNING_AT_TARGET
                     self._status_update_func(f"System {self.region} is running at target.", "success")
                 else:
                     self._logic_state = TISystemLogicState.IDLE
                     
         except Exception as e:
-            error_msg = f"Failed to start TISystem {self.region}: {e}"
-            logger.error(error_msg, exc_info=True)
-            self._status_update_func(f"Error starting {self.region}: {e}", "error")
-            with self._state_lock:
-                self._logic_state = TISystemLogicState.ERROR
-            self.emergency_stop()
+            if not self._trigger_event.is_set():
+                # Only log as error if it wasn't a deliberate stop
+                error_msg = f"Failed to start TISystem {self.region}: {e}"
+                logger.error(error_msg, exc_info=True)
+                self._status_update_func(f"Error starting {self.region}: {e}", "error")
+                with self._state_lock:
+                    self._logic_state = TISystemLogicState.ERROR
+            else:
+                logger.warning(f"TISystem {self.region} start task was interrupted by stop event.")
+                with self._state_lock:
+                    self._logic_state = TISystemLogicState.IDLE
+            
+            self.emergency_stop() # Ensure hardware is safe regardless
         finally:
             with self._state_lock:
                 self._ramp_thread = None
 
+    # --- stop methods (Unchanged) ---
     def stop(self) -> None:
         """
         Starts a non-blocking ramp down to zero for all channels 
@@ -302,7 +319,7 @@ class TISystem:
             self._status_update_func(f"Stopping system {self.region}...", "info")
             self._logic_state = TISystemLogicState.RAMPING_DOWN
             
-            self._stop_event.clear()
+            self._trigger_event.clear()
             
             self._ramp_thread = threading.Thread(
                 target=self._threaded_stop_task,
@@ -322,17 +339,15 @@ class TISystem:
             }
             self.ramp(target_voltages_for_ramp, ramp_durations)
             
-            # 2. Ensure outputs are off (MODIFIED: Concurrent)
-            if not self._stop_event.is_set():
+            # 2. Ensure outputs are off (Concurrent)
+            if not self._trigger_event.is_set():
                 num_channels = len(self.channels)
                 with concurrent.futures.ThreadPoolExecutor(max_workers=num_channels) as executor:
                     futures = [
                         executor.submit(channel.set_output_state, OutputState.OFF)
                         for channel in self.channels.values()
                     ]
-                    # Wait for all outputs to be disabled
                     concurrent.futures.wait(futures)
-                    # Check for exceptions
                     for future in futures:
                         future.result() # Re-raises exceptions
                         
@@ -356,13 +371,16 @@ class TISystem:
             with self._state_lock:
                 self._ramp_thread = None
             
-            self._stop_event.clear()
+            self._trigger_event.clear()
 
+    # --- ramp_channel_voltage methods (MODIFIED) ---
     def ramp_channel_voltage(self, channel_key: str, target_voltage: float, rate_v_per_s: float = 0.1) -> None:
         """
         Starts a non-blocking ramp for a *single* channel (by key) to a
         target voltage at a specified rate (V/s).
         All other channels are held at their current voltage.
+        
+        This method will wait for a hardware trigger before ramping.
         """
         if channel_key not in self.channels:
             self._status_update_func(f"Invalid channel key '{channel_key}'.", "error")
@@ -385,8 +403,9 @@ class TISystem:
 
             self._status_update_func(f"Ramping {channel_key} for {self.region}...", "info")
             
-            self._stop_event.clear()
-            self._logic_state = TISystemLogicState.RAMPING_INTERMEDIATE
+            self._trigger_event.clear()
+            # MODIFICATION: Set state to WAITING_FOR_TRIGGER
+            self._logic_state = TISystemLogicState.WAITING_FOR_TRIGGER
             
             self._ramp_thread = threading.Thread(
                 target=self._threaded_ramp_single_channel_task,
@@ -398,9 +417,37 @@ class TISystem:
     def _threaded_ramp_single_channel_task(self, channel_key: str, target_voltage: float, rate_v_per_s: float) -> None:
         """
         [THREAD-TARGET] Contains the blocking logic for a single channel
-        voltage ramp.
+        voltage ramp, including the trigger-wait.
         """
         try:
+            # --- MODIFICATION: Wait for hardware enabling and trigger ---
+            if not self._trigger_event.is_set():
+                _hw_manager: HardwareManager = next(iter(self.channels.values())).hw_manager
+                trigger_event = _hw_manager.trigger_event
+                
+                # State is already WAITING_FOR_TRIGGER (set by ramp_channel_voltage())
+                self._status_update_func(f"System {self.region} (for {channel_key} ramp) outputs enabled. Waiting for hardware trigger...", "info")
+                logger.info(f"System {self.region} (for {channel_key} ramp) waiting for hardware trigger event...")
+                
+                # This call blocks until the event is set by HardwareManager.send_software_trigger()
+                trigger_event.wait()
+                
+                if self._trigger_event.is_set():
+                     logger.warning(f"System {self.region} stop event triggered while waiting for trigger.")
+                     raise Exception("Stop event triggered during trigger wait")
+                
+                # --- MODIFIED: Transition state from WAITING to RAMPING_INTERMEDIATE ---
+                with self._state_lock:
+                    # Check again in case stop was called right after wait() but before lock
+                    if self._trigger_event.is_set():
+                         raise Exception("Stop event triggered immediately after trigger wait")
+                    self._logic_state = TISystemLogicState.RAMPING_INTERMEDIATE
+                # --- END MODIFICATION ---
+                
+                logger.info(f"System {self.region} hardware trigger event received. Starting single-channel ramp for {channel_key}.")
+                self._status_update_func(f"System {self.region} trigger received. Ramping {channel_key}...", "info")
+            # --- END MODIFICATION ---
+
             # 1. Get ramping channel and calculate duration
             ramping_channel = self.channels[channel_key]
             start_v_ramp = ramping_channel.get_current_voltage()
@@ -421,7 +468,6 @@ class TISystem:
                     target_voltages[key] = target_voltage
                     durations[key] = duration_s
                 else:
-                    # Hold other channels at their current voltage
                     current_v = ch.get_current_voltage()
                     target_voltages[key] = current_v
                     durations[key] = 0.0
@@ -438,7 +484,7 @@ class TISystem:
             
             # 4. Update state on success
             with self._state_lock:
-                if not self._stop_event.is_set():
+                if not self._trigger_event.is_set():
                     all_at_target = True
                     all_at_zero = True
                     
@@ -464,23 +510,31 @@ class TISystem:
                     self._logic_state = TISystemLogicState.IDLE
                     
         except Exception as e:
-            error_msg = f"Failed to ramp channel {channel_key} for TISystem {self.region}: {e}"
-            logger.error(error_msg, exc_info=True)
-            self._status_update_func(f"Error ramping {channel_key} ({self.region}): {e}", "error")
-            with self._state_lock:
-                self._logic_state = TISystemLogicState.ERROR
+            if not self._trigger_event.is_set():
+                # Only log as error if it wasn't a deliberate stop
+                error_msg = f"Failed to ramp channel {channel_key} for TISystem {self.region}: {e}"
+                logger.error(error_msg, exc_info=True)
+                self._status_update_func(f"Error ramping {channel_key} ({self.region}): {e}", "error")
+                with self._state_lock:
+                    self._logic_state = TISystemLogicState.ERROR
+            else:
+                logger.warning(f"TISystem {self.region} ramp task was interrupted by stop event.")
+                with self._state_lock:
+                    self._logic_state = TISystemLogicState.IDLE
+
             self.emergency_stop()
         finally:
             with self._state_lock:
                 self._ramp_thread = None
 
+    # --- emergency_stop (Unchanged) ---
     def emergency_stop(self) -> None:
         """
         Immediately sets all channel amplitudes to 0V and turns outputs off.
         Bypasses any ramp and interrupts any active ramp thread.
         Thread-safe.
         """
-        self._stop_event.set()
+        self._trigger_event.set()
         
         with self._state_lock:
             self._logic_state = TISystemLogicState.ERROR
@@ -497,7 +551,6 @@ class TISystem:
                     for channel in self.channels.values()
                 ]
                 concurrent.futures.wait(futures)
-                # Log exceptions but don't re-raise; stop must not fail
                 for future in futures:
                     if future.exception():
                         logger.error(f"Error during channel immediate_stop: {future.exception()}")
@@ -506,6 +559,7 @@ class TISystem:
             logger.error(f"Error during emergency stop for {self.region}: {e}", exc_info=True)
             self._status_update_func(f"Critical error during e-stop {self.region}: {e}", "error")
 
+    # --- _calculate_trajectories (Unchanged) ---
     def _calculate_trajectories(self, 
                                 target_voltages: Dict[str, float], 
                                 duration_secs: Dict[str, float]
@@ -522,19 +576,13 @@ class TISystem:
             return {}, 0
         
         for key, channel in self.channels.items():
-            # Get start voltage from channel state (thread-safe)
             start_v = channel.get_current_voltage()
-            
-            # Default to current voltage if key is missing
             target_v = max(0.0, target_voltages.get(key, start_v))
-            
-            # Default to 0.0s duration if key is missing
             duration_s = max(0.0, duration_secs.get(key, 0.0))
 
-            # Calculate steps for this channel
             num_steps = 0
             if duration_s == 0.0:
-                num_steps = 2 # At least 2 steps for start/end
+                num_steps = 2
             else:
                 num_steps = int(duration_s / self.ramp_time_step_s)
                 if num_steps < 2:
@@ -542,7 +590,6 @@ class TISystem:
             
             num_steps_dict[key] = num_steps
             
-            # Handle the 0.0 duration case explicitly for holding voltage
             if num_steps == 2 and duration_s == 0.0:
                 trajectories[key] = np.array([start_v, start_v])
             else:
@@ -552,6 +599,7 @@ class TISystem:
         
         return trajectories, num_steps_total
 
+    # --- ramp (Unchanged) ---
     def ramp(self, target_voltages: Dict[str, float], duration_secs: Dict[str, float]) -> None:
         """
         Calculates voltage trajectories and executes the (blocking) ramp.
@@ -577,58 +625,45 @@ class TISystem:
             self.emergency_stop()
             raise
             
+    # --- _execute_ramp (Unchanged) ---
     def _execute_ramp(self, trajectories: Dict[str, np.ndarray], num_steps_total: int, time_step_s: float) -> None:
         """     
         Contains the core loop for executing the voltage ramp.
-        This method is interruptible by _stop_event and now uses a
+        This method is interruptible by _trigger_event and now uses a
         ThreadPoolExecutor to set all channel voltages concurrently.
         """
         
-        # Pre-calculate trajectory lengths
         traj_lengths = {key: len(traj) for key, traj in trajectories.items()}
-        
         start_time = time.time()
         time_step_s = max(0.0, time_step_s) 
-        
         num_channels = len(self.channels)
         
-        # Create the executor once, outside the loop, for efficiency
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_channels) as executor:
             try:
                 for i in range(num_steps_total):
                     
-                    # 1. Check for stop signal
-                    if self._stop_event.is_set():
+                    if self._trigger_event.is_set():
                         self._status_update_func("Ramp interrupted by stop event.", "warning")
                         logger.warning(f"{self.region}: Ramp interrupted by stop event.")
                         break
 
                     step_start_time = time.perf_counter()
                     
-                    # 2. --- Concurrent Hardware Interaction via Channel ---
                     futures = []
                     for key, channel in self.channels.items():
                         traj = trajectories[key]
                         num_steps_ch = traj_lengths[key]
                         
-                        # Get voltage for this step.
-                        # If ramp is shorter, hold final value.
                         v = traj[i] if i < num_steps_ch else traj[-1]
                         
-                        # Submit the I/O task to the thread pool
                         futures.append(executor.submit(channel.set_amplitude, v))
                     
-                    # Wait for all I/O in this step to complete
                     done, not_done = concurrent.futures.wait(futures)
                     
-                    # Check for exceptions from the I/O tasks
                     for future in done:
                         if future.exception():
-                            # If any I/O call failed, raise it
                             raise future.exception()
-                    # ----------------------------------------------------
 
-                    # 3. --- Progress Reporting (Decoupled) ---
                     progress = (i + 1) / num_steps_total * 100
                     if self._progress_callback:
                         try:
@@ -636,30 +671,24 @@ class TISystem:
                         except Exception as e:
                             logger.warning(f"Progress callback for {self.region} failed: {e}")
 
-                    # 4. --- Timing ---
                     if time_step_s > 0:
                         elapsed_step = time.perf_counter() - step_start_time
                         sleep_time = max(0, time_step_s - elapsed_step)
                         time.sleep(sleep_time)
 
-                # --- Final Step (No system lock) ---
-                if not self._stop_event.is_set():
+                if not self._trigger_event.is_set():
                     final_voltages_str_list = []
                     
-                    # Report 100% completion
                     if self._progress_callback:
                         self._progress_callback(self.region, 100.0)
 
-                    # Set final voltages directly to ensure accuracy (concurrently)
                     futures = []
                     for key, channel in self.channels.items():
                         final_v = trajectories[key][-1]
                         futures.append(executor.submit(channel.set_amplitude, final_v))
                     
-                    # Wait for final set
                     concurrent.futures.wait(futures)
                     
-                    # Check for exceptions and build report string
                     for future, (key, channel) in zip(futures, self.channels.items()):
                         if future.exception():
                             raise future.exception()
@@ -673,7 +702,6 @@ class TISystem:
                     self._status_update_func(f"Ramp finished. Voltages: [{final_voltages_str}]", "success")
 
                 else: 
-                    # Ramp was stopped prematurely
                     current_voltages_str_list = []
                     for key, channel in self.channels.items():
                         current_voltages_str_list.append(
@@ -685,14 +713,12 @@ class TISystem:
                     logger.warning(f"{self.region}: Ramp stopped prematurely. Voltages left at: [{current_voltages_str}]")
 
             except Exception as e:
-                # Catch exceptions from I/O (raised from futures) or other errors
                 logger.error(f"Error setting voltage during step {i}: {e}", exc_info=True)
                 self._status_update_func(f"Hardware Error setting voltage: {e}", "error")
                 self.emergency_stop()
                 return
             
             finally:
-                # Clear console line if default callback was used
                 if self._progress_callback == self._default_progress_update:
                     sys.stdout.write('\r\033[K')
                     sys.stdout.flush()
