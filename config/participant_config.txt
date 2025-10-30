@@ -1,3 +1,3 @@
-participants_list_file_path = cfg\participants_list_list_API.xlsx
-condition_file_path = cfg\condition_for_stimulators_API.xlsx
-save_dir_base_path = C:\Users\basil\Documents\TILA_DATA_API_TEST
+participants_list_file_path = C:\Users\basdu83\Documents\TILA_DATA\participants_list.xlsx
+condition_file_path = C:\Users\basdu83\Documents\TILA_DATA\participants_to_condition_list.xlsx
+save_dir_base_path = C:\Users\basdu83\Documents\TILA_DATA
