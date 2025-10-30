@@ -4,7 +4,7 @@ import logging
 import time
 from enum import Enum, auto
 from typing import Dict, Any, Optional
-from ..core.system import TISystem, TISystemHardwareState
+from ..core.system import TISystem, TISystemHardwareState, TISystemLogicState
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,41 @@ class SystemMonitor:
         self.ti_systems = ti_systems
 
     @property
-    def overall_state(self) -> TIManagerState:
+    def any_trigger_request(self) -> bool:
+        """
+        Dynamically derives the TIManager's state by polling all subsystems.
+        
+        - If *any* system is not IDLE, the manager is considered RUNNING.
+        - If *all* systems are IDLE, the manager is considered IDLE.
+        """
+        if not self.ti_systems:
+            return False
+            
+        for system in self.ti_systems.values():
+            if system.logic_state == TISystemLogicState.WAITING_FOR_TRIGGER:
+                return True
+        
+        return False
+    
+    @property
+    def overall_logic_state(self) -> TIManagerState:
+        """
+        Dynamically derives the TIManager's state by polling all subsystems.
+        
+        - If *any* system is not IDLE, the manager is considered RUNNING.
+        - If *all* systems are IDLE, the manager is considered IDLE.
+        """
+        if not self.ti_systems:
+            return TIManagerState.IDLE
+            
+        for system in self.ti_systems.values():
+            if system.logic_state != TISystemLogicState.IDLE:
+                return TIManagerState.RUNNING
+        
+        return TIManagerState.IDLE
+
+    @property
+    def overall_hardware_state(self) -> TIManagerState:
         """
         Dynamically derives the TIManager's state by polling all subsystems.
         
