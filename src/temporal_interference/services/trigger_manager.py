@@ -27,7 +27,7 @@ class TriggerManager:
 
     def __init__(self, 
                  monitor: SystemMonitor, 
-                 hw_manager: Optional[HardwareManager], 
+                 hw_manager: Optional[HardwareManager],
                  poll_interval_s: float = 0.1,
                  idle_debounce_s: float = 10.0,
                  trigger_delay_s: float = 1.0):
@@ -104,7 +104,7 @@ class TriggerManager:
             return
 
         # Initialize state
-        self._current_state = self.monitor.overall_state
+        self._current_state = self.monitor.overall_hardware_state
         if self._current_state == TIManagerState.IDLE:
             self._idle_transition_time = time.time()
         else:
@@ -133,13 +133,12 @@ class TriggerManager:
                     self._stop_event.wait(self.poll_interval_s * 10) # e.g., wait 1 second
                     continue # Skip main logic until connected
 
-                # --- If connected, proceed with normal logic ---
-                new_state = self.monitor.overall_state
+                
+                current_hw_state = self.monitor.overall_hardware_state
 
                 # --- Check for State Transitions ---
-
                 # 1. Transition: IDLE -> RUNNING
-                if new_state == TIManagerState.RUNNING and self._current_state == TIManagerState.IDLE:
+                if self.monitor.any_trigger_request and self._current_state == TIManagerState.IDLE:
                     logger.info("[State Monitor Thread] State change IDLE -> RUNNING.")
                     
                     # MODIFICATION: Only enable if hardware is currently disabled
@@ -165,13 +164,13 @@ class TriggerManager:
                     self._idle_transition_time = None # Cancel idle timer
 
                 # 2. Transition: RUNNING -> IDLE
-                elif new_state == TIManagerState.IDLE and self._current_state == TIManagerState.RUNNING:
+                elif self._current_state == TIManagerState.RUNNING and current_hw_state == TIManagerState.IDLE:
                     logger.info(f"[State Monitor Thread] State change RUNNING -> IDLE. Starting {self.idle_debounce_s}s disable timer.")
                     self._idle_transition_time = time.time() # Start idle timer
 
                 
                 # --- Check for Persistent IDLE State ---
-                if new_state == TIManagerState.IDLE and self._idle_transition_time is not None:
+                if self._idle_transition_time is not None and current_hw_state == TIManagerState.IDLE:
                     elapsed_idle_time = time.time() - self._idle_transition_time
                     
                     if elapsed_idle_time > self.idle_debounce_s:
@@ -188,7 +187,7 @@ class TriggerManager:
                         self._idle_transition_time = None # Reset timer to prevent re-triggering
                 
                 # Update current state
-                self._current_state = new_state
+                self._current_state = current_hw_state
 
             except Exception as e:
                 logger.error(f"[State Monitor Thread] An unexpected error occurred: {e}", exc_info=True)
