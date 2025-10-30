@@ -19,17 +19,18 @@ class TriggerManager:
     Monitors the overall TISystem state in a background thread and
     automatically manages hardware enable/disable/trigger states.
 
-    - (IDLE -> RUNNING): Enables all channels and sends a software trigger
-      ONLY if hardware is not already enabled.
+    - (IDLE -> RUNNING): Enables all channels, waits for a configurable delay,
+      and then sends a software trigger ONLY if hardware is not already enabled.
     - (RUNNING -> IDLE): Waits for a 10-second debounce period. If
       still IDLE, disables all channels and sends an abort.
     """
 
     def __init__(self, 
                  monitor: SystemMonitor, 
-                 hw_manager: Optional[HardwareManager], # MODIFIED: Changed manager to hw_manager
+                 hw_manager: Optional[HardwareManager],
                  poll_interval_s: float = 0.1,
-                 idle_debounce_s: float = 10.0):
+                 idle_debounce_s: float = 10.0,
+                 trigger_delay_s: float = 1.0):
         """
         Initializes the TriggerManager.
 
@@ -39,15 +40,17 @@ class TriggerManager:
             poll_interval_s (float): How often to check the state.
             idle_debounce_s (float): Time to wait in IDLE state before
                                      disabling hardware.
+            trigger_delay_s (float): Time to wait between enabling channels
+                                     and sending the software trigger.
         """
         self.monitor = monitor
-        self.hw_manager = hw_manager # MODIFIED
+        self.hw_manager = hw_manager
         self.poll_interval_s = poll_interval_s
         self.idle_debounce_s = idle_debounce_s
-
+        self.trigger_delay_s = trigger_delay_s # MODIFIED: Store delay
+        
         self._current_state = TIManagerState.IDLE
         self._idle_transition_time: Optional[float] = None
-        # MODIFICATION: Add new state to track actual hardware enable state
         self._hardware_enabled: bool = False 
         
         self._stop_event = threading.Event()
@@ -101,7 +104,7 @@ class TriggerManager:
             return
 
         # Initialize state
-        self._current_state = self.monitor.overall_state
+        self._current_state = self.monitor.overall_hardware_state
         if self._current_state == TIManagerState.IDLE:
             self._idle_transition_time = time.time()
         else:
@@ -130,34 +133,44 @@ class TriggerManager:
                     self._stop_event.wait(self.poll_interval_s * 10) # e.g., wait 1 second
                     continue # Skip main logic until connected
 
-                # --- If connected, proceed with normal logic ---
-                new_state = self.monitor.overall_state
+                
+                current_hw_state = self.monitor.overall_hardware_state
 
                 # --- Check for State Transitions ---
-
                 # 1. Transition: IDLE -> RUNNING
-                if new_state == TIManagerState.RUNNING and self._current_state == TIManagerState.IDLE:
+                if self.monitor.any_trigger_request and self._current_state == TIManagerState.IDLE:
                     logger.info("[State Monitor Thread] State change IDLE -> RUNNING.")
                     
                     # MODIFICATION: Only enable if hardware is currently disabled
                     if not self._hardware_enabled:
-                        logger.info("Hardware is disabled. Enabling and triggering.")
+                        logger.info("Hardware is disabled. Enabling...")
                         self.hw_manager.enable_all_channels()
-                        self.hw_manager.send_software_trigger()
-                        self._hardware_enabled = True # Mark hardware as enabled
+                        
+                        # MODIFIED: Wait for the configured delay before triggering
+                        logger.info(f"Waiting for {self.trigger_delay_s}s before sending trigger.")
+                        self._stop_event.wait(self.trigger_delay_s) 
+                        
+                        if not self._stop_event.is_set():
+                            logger.info("Sending software trigger.")
+                            self.hw_manager.send_software_trigger()
+                            self._hardware_enabled = True # Mark hardware as enabled
+                        else:
+                            # Handle case where stop was requested during the delay
+                            logger.warning("Stop requested during trigger delay. Skipping trigger.")
+                            # The hardware is enabled, but the main loop will handle the shutdown process
                     else:
                         logger.info("Hardware is already enabled (re-trigger within debounce). Skipping enable.")
                     
                     self._idle_transition_time = None # Cancel idle timer
 
                 # 2. Transition: RUNNING -> IDLE
-                elif new_state == TIManagerState.IDLE and self._current_state == TIManagerState.RUNNING:
+                elif self._current_state == TIManagerState.RUNNING and current_hw_state == TIManagerState.IDLE:
                     logger.info(f"[State Monitor Thread] State change RUNNING -> IDLE. Starting {self.idle_debounce_s}s disable timer.")
                     self._idle_transition_time = time.time() # Start idle timer
 
                 
                 # --- Check for Persistent IDLE State ---
-                if new_state == TIManagerState.IDLE and self._idle_transition_time is not None:
+                if self._idle_transition_time is not None and current_hw_state == TIManagerState.IDLE:
                     elapsed_idle_time = time.time() - self._idle_transition_time
                     
                     if elapsed_idle_time > self.idle_debounce_s:
@@ -174,7 +187,7 @@ class TriggerManager:
                         self._idle_transition_time = None # Reset timer to prevent re-triggering
                 
                 # Update current state
-                self._current_state = new_state
+                self._current_state = current_hw_state
 
             except Exception as e:
                 logger.error(f"[State Monitor Thread] An unexpected error occurred: {e}", exc_info=True)
