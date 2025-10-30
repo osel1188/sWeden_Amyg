@@ -4,7 +4,8 @@
 # It functions as a Hardware Abstraction Layer (HAL).
 
 import logging
-import threading # Note: RLock is no longer used here
+import threading
+import time  # --- NEW IMPORT ---
 from typing import Dict, Any, Callable
 
 # Local imports (assumed)
@@ -36,11 +37,14 @@ class HardwareManager:
         """
         self.drivers: Dict[str, AbstractWaveformGenerator] = drivers
         
-        # MODIFICATION: The universal I/O lock has been removed.
-        # self._io_lock = threading.RLock()
-        
         # Mapping: logical_channel_id -> (driver_instance, physical_channel_num)
         self._channel_mapping: Dict[str, tuple[AbstractWaveformGenerator, int]] = {}
+        
+        # --- NEW: Synchronization event for software trigger ---
+        self._trigger_event = threading.Event()
+        
+        # --- NEW: Configurable wait time after trigger ---
+        self._trigger_wait_s: float = 1.0
         
         logger.info(f"HardwareManager initialized with drivers: {list(drivers.keys())}")
 
@@ -58,6 +62,15 @@ class HardwareManager:
         # Return True only if all drivers report they are connected
         all_connected = all(driver.is_connected for driver in self.drivers.values())
         return all_connected
+
+    # --- NEW: Public property for the trigger event ---
+    @property
+    def trigger_event(self) -> threading.Event:
+        """
+        Event that is set when the hardware trigger (send_software_trigger)
+        is called. Systems can wait() on this event.
+        """
+        return self._trigger_event
 
     def register_channel_mapping(self, 
                                  logical_channel_id: str, 
@@ -105,8 +118,6 @@ class HardwareManager:
         """
         driver, phys_ch = self._get_driver_and_channel(logical_channel_id)
         
-        # MODIFICATION: Lock removed.
-        # with self._io_lock:
         try:
             # The driver itself is responsible for thread-safe I/O.
             return io_func(driver, phys_ch)
@@ -123,10 +134,6 @@ class HardwareManager:
         MODIFICATION: This method now correctly checks the 'is_connected'
         property on the driver.
         """
-        # This method is not internally locked, as connecting independent
-        # devices can and should happen concurrently if the drivers support it.
-        # The Keysight driver's lock is per-resource, so connecting two
-        # *different* Keysight devices will be thread-safe and concurrent.
         logger.info("Connecting to all hardware drivers...")
         for driver_id, driver in self.drivers.items():
             try:
@@ -138,8 +145,6 @@ class HardwareManager:
                     logger.info(f"Driver '{driver_id}' is already connected.")
             except Exception as e:
                 logger.error(f"Failed to connect to '{driver_id}': {e}", exc_info=True)
-                # Decide on error handling: re-raise to stop startup, or continue?
-                # Re-raising is safer.
                 raise
         logger.info("All hardware connections established.")
 
@@ -157,9 +162,17 @@ class HardwareManager:
                     driver.disconnect()
                     logger.info(f"Successfully disconnected from '{driver_id}'.")
             except Exception as e:
-                # Log errors but continue disconnecting other devices
                 logger.error(f"Error disconnecting from '{driver_id}': {e}", exc_info=True)
         logger.info("All hardware connections closed.")
+        
+    # --- NEW: Method to configure post-trigger wait ---
+    def set_trigger_wait_time(self, seconds: float):
+        """
+        Sets the wait time (in seconds) to apply after
+        sending a software trigger.
+        """
+        self._trigger_wait_s = max(0.0, seconds)
+        logger.info(f"Hardware trigger post-wait time set to {self._trigger_wait_s}s.")
 
     def enable_all_channels(self):
         """
@@ -184,17 +197,41 @@ class HardwareManager:
         logger.warning("All registered channel outputs disabled.")
 
     def send_software_trigger(self):
+        """
+        MODIFIED: Sends trigger to all drivers, SETS the sync event,
+        and WAITS for the configured duration.
+        """
+        # 1. Clear the event in case it was set from a previous run
+        self._trigger_event.clear()
+        
+        # 2. Send trigger to all drivers
         for driver in self.drivers.values():
             driver.send_software_trigger()
-        logger.warning("All registered devices started signaling.")
+            
+        logger.warning("All registered devices started signaling. Setting trigger event.")
+        
+        # 3. Wait for the configured post-trigger duration
+        if self._trigger_wait_s > 0:
+            logger.info(f"Waiting for {self._trigger_wait_s}s after trigger...")
+            time.sleep(self._trigger_wait_s)
+            logger.info("Post-trigger wait complete.")
+        else:
+            logger.info("Post-trigger wait time is 0. Proceeding immediately.")
+            
+        # 4. Set the event to release any waiting TISystem threads
+        self._trigger_event.set()
 
     def abort(self):
+        # MODIFICATION: Clear the trigger event on abort.
+        # This signals to any waiting threads that the triggered
+        # state is no longer valid.
+        self._trigger_event.clear()
+        
         for driver in self.drivers.values():
             driver.abort()
         logger.warning("All registered devices stopped.")
 
     # --- Public I/O Interface (Setters) ---
-    # These methods are now concurrent for independent devices.
 
     def set_output_state(self, logical_channel_id: str, state: OutputState):
         """Sets the output state for a logical channel."""
