@@ -66,7 +66,7 @@ class TISystem:
         self.channels: Dict[str, TIChannel] = channels
         
         # --- Operational Parameters (Unchanged) ---
-        self.ramp_time_step_s: float = 0.02 # 50 Hz
+        self.ramp_time_step_s: float = 0.1 # 10 Hz: The current waveform gen cannot receive messages faster.
 
     # --- _default_status_update (Unchanged) ---
     def _default_status_update(self, message: str, level: str):
