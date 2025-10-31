@@ -6,3 +6,4 @@ testerss.py
 *.xlsx
 *.xlsx
 cfg/participant_conditions_path.txt
+MOCK_DEVICE_ENABLED

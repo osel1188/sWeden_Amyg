@@ -1,0 +1,244 @@
+from abc import ABC, abstractmethod
+from enum import Enum
+from typing import Type, Optional, Any, Dict, TypeVar
+
+# ======================================================================================
+# Helper Enumerations for a Type-Safe API
+# ======================================================================================
+
+class OutputState(Enum):
+    """Defines the possible output states for a generator channel."""
+    ON = 'ON'
+    OFF = 'OFF'
+
+class WaveformShape(Enum):
+    """Defines standard waveform shapes supported by function generators."""
+    SINE = 'SIN'
+    SQUARE = 'SQU'
+    RAMP = 'RAMP'
+    PULSE = 'PULS'
+    ARBITRARY = 'ARB'
+
+class TriggerSource(Enum):
+    """Defines standard trigger sources."""
+    BUS = 'BUS'        # Software/Internal Trigger
+    EXTERNAL = 'EXT'   # External Hardware Trigger
+
+# ======================================================================================
+# Cohesive Abstract Base Class
+# ======================================================================================
+
+# Type variable for the factory
+T_Generator = TypeVar('T_Generator', bound='AbstractWaveformGenerator')
+
+class AbstractWaveformGenerator(ABC):
+    """
+    Abstract Base Class for a signal/waveform generator.
+        
+    This class defines a standard interface for instrument control, including
+    connection management, channel configuration, and status reporting. It is
+    designed to be used as a context manager to ensure proper resource handling.
+    """
+    
+    # --- Class-level Registry for Factory Pattern ---
+    _driver_registry: Dict[str, Type[T_Generator]] = {}
+
+    def __init_subclass__(cls, *, model_id: str, **kwargs: Any) -> None:
+        """
+        Magic method to automatically register any subclass.
+        """
+        super().__init_subclass__(**kwargs)
+        if model_id in cls._driver_registry:
+            raise ValueError(
+                f"Error: Duplicate model_id '{model_id}' attempting to "
+                f"register class {cls.__name__}. "
+                f"Already registered to {cls._driver_registry[model_id].__name__}."
+            )
+        cls._driver_registry[model_id] = cls
+        cls.model = model_id
+        
+
+    def __init__(self, resource_id: str, **kwargs: Any) -> None:
+        """
+        Initializes the generator with a specific hardware resource identifier.
+        """
+        self.resource_id = resource_id
+
+    # --- Factory Accessor Method (Static) ---
+    
+    @staticmethod
+    def get_registered_drivers() -> Dict[str, Type[T_Generator]]:
+        """Returns a copy of the driver registry."""
+        return AbstractWaveformGenerator._driver_registry.copy()
+        
+    @staticmethod
+    def get_driver_class(model_id: str) -> Type[T_Generator]:
+        """
+        Looks up and returns a driver class from the registry.
+        """
+        try:
+            return AbstractWaveformGenerator._driver_registry[model_id]
+        except KeyError:
+            raise ValueError(
+                f"No driver registered with model_id: '{model_id}'. "
+                f"Available drivers: {list(AbstractWaveformGenerator._driver_registry.keys())}"
+            )
+
+    # --- Connection Management (Context Manager) ---
+    
+    @abstractmethod
+    def connect(self) -> None:
+        pass
+
+    @abstractmethod
+    def disconnect(self) -> None:
+        pass
+
+    def __enter__(self) -> 'AbstractWaveformGenerator':
+        self.connect()
+        return self
+
+    def __exit__(self,
+                 exc_type: Optional[Type[BaseException]],
+                 exc_value: Optional[BaseException],
+                 traceback: Optional[Any]) -> None:
+        self.disconnect()
+    
+    # --- Instrument Status ---
+
+    @property
+    @abstractmethod
+    def is_connected(self) -> bool:
+        """Returns True if the instrument is currently connected."""
+        pass
+
+    @abstractmethod
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Returns a dictionary containing the current status of the hardware.
+        """
+        pass
+
+    # --- Low-Level Channel Configuration (Setters) ---
+    @abstractmethod
+    def set_output_state(self, channel: int, state: OutputState) -> None:
+        """
+        Enables or disables a specific output channel.
+        """
+        pass
+
+    @abstractmethod
+    def set_frequency(self, channel: int, frequency: float) -> None:
+        """
+        Sets the frequency for a specific channel.
+        """
+        pass
+
+    @abstractmethod
+    def set_amplitude(self, channel: int, amplitude: float) -> None:
+        """
+        Sets the voltage amplitude for a specific channel.
+        """
+        pass
+        
+    @abstractmethod
+    def set_offset(self, channel: int, offset: float) -> None:
+        """
+        Sets the DC voltage offset for a specific channel.
+        """
+        pass
+
+    @abstractmethod
+    def set_waveform_shape(self, channel: int, shape: WaveformShape) -> None:
+        """
+        Sets the waveform shape for a specific channel.
+        """
+        pass
+
+    # --- Low-Level Channel Configuration (Getters) ---
+    
+    @abstractmethod
+    def get_frequency(self, channel: int) -> float:
+        """
+        Queries the frequency of a specific channel.
+        """
+        pass
+
+    @abstractmethod
+    def get_amplitude(self, channel: int) -> float:
+        """
+        Queries the peak-to-peak voltage amplitude (Vpp) of a specific channel.
+        """
+        pass
+
+    @abstractmethod
+    def get_offset(self, channel: int) -> float:
+        """
+        Queries the DC offset voltage of a specific channel.
+        """
+        pass
+
+    # --- High-Level and Utility Methods ---
+    
+    @abstractmethod
+    def initialize_device_settings(self, config: Dict[str, Any]) -> None:
+        """
+        Applies a dictionary of settings to the instrument.
+        """
+        pass
+
+    @abstractmethod
+    def enable_channels(self) -> None:
+        """
+        Enables the physical output state for the device channels.
+        """
+        pass
+
+    @abstractmethod
+    def disable_channels(self) -> None:
+        """
+        Disables the physical output state for the device channels.
+        """
+        pass
+
+    @abstractmethod
+    def send_software_trigger(self) -> None:
+        """
+        Starts waveform generation on the device channels if the device has been set to BUS trigger.
+        """
+        pass
+
+    @abstractmethod
+    def abort(self) -> None:
+        """
+        Aborts the current waveform generation and returns to an idle state.
+        """
+        pass
+
+    # --- High-Level Convenience Method ---
+    
+    def apply_waveform(self,
+                         channel: int,
+                         shape: WaveformShape,
+                         frequency: float,
+                         amplitude: float,
+                         offset: float = 0.0,
+                         enable_output: bool = True) -> None:
+        """
+        A convenience method to configure and apply a standard waveform to a channel.
+
+        Args:
+            channel (int): The channel number.
+            shape (WaveformShape): The waveform shape.
+            frequency (float): The frequency in Hertz (Hz).
+            amplitude (float): The voltage amplitude (Vpp).
+            offset (float, optional): The DC offset in Volts (V). Defaults to 0.0.
+            enable_output (bool, optional): If True, enables the channel output
+                                            after configuration. Defaults to True.
+        """
+        self.set_waveform_shape(channel, shape)
+        self.set_frequency(channel, frequency)
+        self.set_amplitude(channel, amplitude)
+        self.set_offset(channel, offset)
+        if enable_output:
+            self.set_output_state(channel, OutputState.ON)

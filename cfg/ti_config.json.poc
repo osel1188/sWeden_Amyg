@@ -1,0 +1,123 @@
+{
+  "hardware": {
+    "waveform_generators": [
+      {
+        "id": "generator_A",
+        "model": "KeysightEDU33212A",
+        "resource_name": "USB0::0x2A8D::0x8D01::CN64050087::0::INSTR",
+        "comment": "Primary waveform generator."
+      },
+      {
+        "id": "generator_B",
+        "model": "KeysightEDU33212A",
+        "resource_name": "USB0::0x2A8D::0x8D01::CN62490141::0::INSTR",
+        "comment": "Secondary waveform generator."
+      }
+    ],
+    "electrodes": [
+      { "id": 1, "name": "e_94" },
+      { "id": 2, "name": "e_67" },
+      { "id": 3, "name": "e_190" },
+      { "id": 4, "name": "e_10" },
+      { "id": 5, "name": "e_211" },
+      { "id": 6, "name": "e_191" },
+      { "id": 7, "name": "e_46" },
+      { "id": 8, "name": "e_106" }
+    ],
+    "ti_systems": {
+      "ti_A": {
+        "target": "amygdala's left side",
+        "channels": {
+          "A1": {
+            "waveform_generator": "generator_A",
+            "waveform_generator_channel": 1,
+            "electrode_id_A": 1,
+            "electrode_id_B": 2
+          },
+          "A2": {
+            "waveform_generator": "generator_A",
+            "waveform_generator_channel": 2,
+            "electrode_id_A": 3,
+            "electrode_id_B": 4
+          }
+        }
+      },
+      "ti_B": {
+        "target": "amygdala's right side",
+        "channels": {
+          "B1": {
+            "waveform_generator": "generator_B",
+            "waveform_generator_channel": 1,
+            "electrode_id_A": 5,
+            "electrode_id_B": 6
+          },
+          "B2": {
+            "waveform_generator": "generator_B",
+            "waveform_generator_channel": 2,
+            "electrode_id_A": 7,
+            "electrode_id_B": 8
+          }
+        }
+      }
+    }
+  },
+  "waveform_generator_config": {
+    "default": {
+      "function": "SIN",
+      "load_impedance": "INFinity",
+      "burst_num_cycles": "INFinity",
+      "burst_state": true,
+      "burst_mode": "TRIGgered",
+      "burst_phase": 0,
+      "trigger_source": "EXT"
+    },
+    "waveform_generator_presets_assignments": [ { 
+        "generator_id": "generator_A", 
+        "preset": "default", 
+        "overwrite": {
+          "trigger_source": "BUS"
+        }
+      },
+      { 
+        "generator_id": "generator_B", 
+        "preset": "default" 
+      }
+    ],
+    "safety_limits": {
+      "max_amplitude_vp": 8.0
+    }
+  },
+  "protocols": {
+    "active": {
+      "description": "Active stimulation protocol with a 130 Hz beat frequency.",
+      "ti_A": {
+        "channel_settings": [
+          { "channel": "A1", "frequency_hz": 7000, "target_voltage_V": 1.0, "ramp_duration_s": 10},
+          { "channel": "A2", "frequency_hz": 7000, "target_voltage_V": 1.0, "ramp_duration_s": 10}
+        ]
+      },
+      "ti_B": {
+        "channel_settings": [
+          { "channel": "B1", "frequency_hz": 7000, "target_voltage_V": 1.0, "ramp_duration_s": 10},
+          { "channel": "B2", "frequency_hz": 7000, "target_voltage_V": 1.0, "ramp_duration_s": 10}
+        ]
+      }
+    },
+    "sham": {
+      "description": "Sham protocol with no beat frequency.",
+      "common_settings": { "target_voltage_V": 1.0, "ramp_duration_s": 60 },
+      "ti_A": {
+        "channel_settings": [
+          { "channel": "A1", "frequency_hz": 7000, "target_voltage_V": 1.0, "ramp_duration_s": 60},
+          { "channel": "A2", "frequency_hz": 7000, "target_voltage_V": 1.0, "ramp_duration_s": 60}
+        ]
+      },
+      "ti_B": {
+        "channel_settings": [
+          { "channel": "B1", "frequency_hz": 9000, "target_voltage_V": 1.0, "ramp_duration_s": 60},
+          { "channel": "B2", "frequency_hz": 9000, "target_voltage_V": 1.0, "ramp_duration_s": 60}
+        ]
+      }
+    }
+  }
+}
