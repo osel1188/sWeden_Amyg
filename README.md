@@ -58,8 +58,8 @@ python -m venv venv
 ```
 
 Activate the environment:
-* On Windows (PowerShell): .\venv\Scripts\Activate.ps1
-* On macOS/Linux (Bash): source venv/bin/activate
+* On Windows (PowerShell): `.\venv\Scripts\Activate.ps1`
+* On macOS/Linux (Bash): `source venv/bin/activate`
 
 Install the package in editable mode:
 
