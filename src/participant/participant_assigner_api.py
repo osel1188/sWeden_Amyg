@@ -6,7 +6,7 @@ from .assignment_service import AssignmentService, AssignmentError
 from .config_loader import ConfigLoader
 from .participant_data_logger import ParticipantDataLogger
 from .condition_repository import ConditionRepository
-from .participant_repository import ParticipantsListRepository
+from .participant_list import ParticipantsList
 
 
 # --- Concern 5: The Public API Facade ---
@@ -35,8 +35,8 @@ class ParticipantAssignerAPI:
         
         # MODIFIED: Use ConditionRepository
         self.condition_repository = ConditionRepository(self.condition_path)
-        # MODIFIED: Initialize ParticipantsListRepository
-        self.participants_list_repo = ParticipantsListRepository(self.participants_list_path)
+        # MODIFIED: Initialize ParticipantsList
+        self.participants_list_repo = ParticipantsList(self.participants_list_path)
         self.service = AssignmentService()
         self.logger = ParticipantDataLogger()
 

@@ -5,7 +5,7 @@ from .participant_assigner_api import ParticipantAssignerAPI
 
 # Import custom exceptions for client error handling
 from .config_loader import ConfigError
-from .participant_repository import RepositoryError
+from .participant_list import ParticipantsListError
 from .assignment_service import AssignmentError
 from .participant_data_logger import FileSystemError
 
@@ -14,7 +14,7 @@ from .participant_data_logger import FileSystemError
 __all__ = [
     "ParticipantAssignerAPI",
     "ConfigError",
-    "RepositoryError",
+    "ParticipantsListError",
     "AssignmentError",
     "FileSystemError"
 ]

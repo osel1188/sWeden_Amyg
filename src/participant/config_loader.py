@@ -24,11 +24,15 @@ class ConfigLoader:
         :raises ConfigError: If file not found or keys are missing.
         """
         try:
-            with open(self.config_file_path, 'r') as f:
+            # MODIFICATION: Added encoding="utf-8" to handle special characters
+            # like 'ö' which are saved in the UTF-8 config file.
+            with open(self.config_file_path, 'r', encoding="utf-8") as f:
                 for line in f:
                     if '=' in line:
                         key, value = line.split('=', 1)
-                        self.config_paths[key.strip()] = value.strip()
+                        # MODIFICATION: Added lstrip('\ufeff') to remove a 
+                        # potential Byte Order Mark (BOM) from the value.
+                        self.config_paths[key.strip()] = value.strip().lstrip('\ufeff')
             
             self._validate_keys()
             return self.config_paths
@@ -56,6 +60,9 @@ class ConfigLoader:
     def get_save_dir(self) -> Path:
         return Path(self.config_paths['save_dir_base_path'])
 
-    # RENAMED: Getter for the participants list path
+    # Getter for the participants list path
     def get_participants_list_path(self) -> str:
+        # Note: This path still uses raw string or forward slashes
+        # from the previous step. This function just returns the
+        # correctly decoded string.
         return self.config_paths['participants_list_file_path']
