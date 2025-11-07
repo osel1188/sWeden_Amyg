@@ -10,7 +10,7 @@ import pandas as pd
 from typing import Optional
 
 # Import the controller and API error types
-from participant import ParticipantAssignerAPI, AssignmentError, RepositoryError 
+from participant import ParticipantAssignerAPI, AssignmentError, ParticipantsListError 
 
 class ParticipantInfoWidget(QWidget):
     """
@@ -228,7 +228,7 @@ class ParticipantInfoWidget(QWidget):
                     f"No available assignment rows found for sex: '{selected_sex}'."
                 )
 
-        except (AssignmentError, RepositoryError) as e:
+        except (AssignmentError, ParticipantsListError) as e:
             QMessageBox.critical(self, "API Error", f"A processing error occurred: {e}")
         except Exception as e:
             QMessageBox.critical(self, "Unexpected Error", f"An unexpected error occurred: {e}")
