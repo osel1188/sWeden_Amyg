@@ -167,7 +167,15 @@ class ParticipantInfoWidget(QWidget):
         if user_data is not None:
             # A participant row was selected
             self.id_input.setText(user_data.ID)
-            self.sex_combo.setCurrentText(user_data.sex)
+            
+            # --- MODIFICATION: Map 'M'/'F' to 'Male'/'Female' ---
+            sex_value = user_data.sex
+            if sex_value == "M":
+                self.sex_combo.setCurrentText("Male")
+            elif sex_value == "F":
+                self.sex_combo.setCurrentText("Female")
+            # --- END MODIFICATION ---
+            
             self.id_input.setReadOnly(True)
             self.sex_combo.setEnabled(False)
         else:
