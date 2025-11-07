@@ -18,7 +18,7 @@ from temporal_interference.api import TIAPI
 from ui.main_window import ExperimentWindow  # Import the GUI window
 
 # NEW: Import participant API and related errors
-from participant import ParticipantAssignerAPI, ConfigError, RepositoryError
+from participant import ParticipantAssignerAPI, ConfigError, ParticipantsListError
 
 
 def main():
