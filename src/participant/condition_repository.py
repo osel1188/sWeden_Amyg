@@ -1,6 +1,8 @@
 import pandas as pd
 from pathlib import Path
 from typing import Union
+from datetime import datetime  # Added for timestamping
+import shutil                  # Added for file copying
 
 class RepositoryError(Exception):
     """Errors related to Excel data reading or writing."""
@@ -20,6 +22,7 @@ class ConditionRepository:
             "Task1", "Task2", "Task3", "Task4", "Task5", "Task6",
             "EM version", "Stroop version"
         ]
+        # "session date" is intentionally omitted from required_cols
 
     def load_data(self) -> pd.DataFrame:
         """
@@ -60,16 +63,58 @@ class ConditionRepository:
         existing_rows = df[df_id_as_str == participant_id_clean]
         return existing_rows
 
-    def save_data(self, df: pd.DataFrame):
+    def save_data(self, df: pd.DataFrame, *, archive_previous: bool = True):
         """
         Saves the DataFrame back to the Excel file.
+        Adds a 'session date' column with the current date before saving.
+        Optionally archives the existing file before overwriting.
         
         :param df: The DataFrame to save.
-        :raises RepositoryError: If permission is denied or write fails.
+        :param archive_previous: If True (default), copy the existing file
+                                 to 'archive_conditions_file/' with a timestamp
+                                 before saving.
+        :raises RepositoryError: If permission is denied, write fails, or archiving fails.
         """
+        # Ensure self.excel_file_path is a Path object for manipulation
+        file_path = Path(self.excel_file_path)
+
+        # 1. Archive logic
+        if archive_previous and file_path.exists():
+            try:
+                # Define archive directory (relative to the excel file)
+                archive_dir = file_path.parent / "archive_conditions_file"
+                
+                # Create directory if it doesn't exist
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Generate timestamp string
+                now = datetime.now()
+                timestamp = now.strftime("%Y-%m-%d_%H-%M")
+                
+                # Create new archive filename
+                # (e.g., "my_file_2025-11-07_13-54.xlsx")
+                file_stem = file_path.stem
+                file_suffix = file_path.suffix
+                archive_file_name = f"{file_stem}_{timestamp}{file_suffix}"
+                archive_path = archive_dir / archive_file_name
+                
+                # Copy the existing file to the archive location
+                # shutil.copy2 preserves metadata
+                shutil.copy2(file_path, archive_path)
+                
+            except Exception as e:
+                # Catch any archiving error (permissions, disk space, etc.)
+                raise RepositoryError(f"Failed to archive existing file: {e}")
+
+        # 2. Save logic
         try:
-            df.to_excel(self.excel_file_path, index=False)
+            # MODIFICATION: Add/update the 'session date' column with the current date
+            now_date_str = datetime.now().strftime("%Y-%m-%d")
+            df['session date'] = now_date_str
+            
+            # Save the new data to the original file path
+            df.to_excel(file_path, index=False)
         except PermissionError:
-            raise RepositoryError(f"Permission denied. Cannot write to {self.excel_file_path}.")
+            raise RepositoryError(f"Permission denied. Cannot write to {file_path}.")
         except Exception as e:
             raise RepositoryError(f"Error writing to Excel file: {e}")
