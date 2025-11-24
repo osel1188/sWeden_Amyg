@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from typing import Union
+from typing import Union, Optional
 from datetime import datetime  # Added for timestamping
 import shutil                  # Added for file copying
 
@@ -63,13 +63,15 @@ class ConditionRepository:
         existing_rows = df[df_id_as_str == participant_id_clean]
         return existing_rows
 
-    def save_data(self, df: pd.DataFrame, *, archive_previous: bool = True):
+    def save_data(self, df: pd.DataFrame, participant_id: Optional[str] = None, *, archive_previous: bool = True):
         """
         Saves the DataFrame back to the Excel file.
-        Adds a 'session date' column with the current date before saving.
+        Adds/Updates 'session date' for the specific participant row if ID is provided.
         Optionally archives the existing file before overwriting.
         
         :param df: The DataFrame to save.
+        :param participant_id: The specific participant ID to stamp with the current date.
+                               If None, no session date update occurs.
         :param archive_previous: If True (default), copy the existing file
                                  to 'archive_conditions_file/' with a timestamp
                                  before saving.
@@ -89,10 +91,11 @@ class ConditionRepository:
                 
                 # Generate timestamp string
                 now = datetime.now()
-                timestamp = now.strftime("%Y-%m-%d_%H-%M")
+                # MODIFICATION: Added seconds to timestamp format
+                timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
                 
                 # Create new archive filename
-                # (e.g., "my_file_2025-11-07_13-54.xlsx")
+                # (e.g., "my_file_2025-11-07_13-54-12.xlsx")
                 file_stem = file_path.stem
                 file_suffix = file_path.suffix
                 archive_file_name = f"{file_stem}_{timestamp}{file_suffix}"
@@ -108,9 +111,24 @@ class ConditionRepository:
 
         # 2. Save logic
         try:
-            # MODIFICATION: Add/update the 'session date' column with the current date
-            now_date_str = datetime.now().strftime("%Y-%m-%d")
-            df['session date'] = now_date_str
+            # MODIFICATION: Update 'session date' only for the specific participant_id row
+            if participant_id is not None:
+                now_date_str = datetime.now().strftime("%Y-%m-%d")
+                
+                # Ensure 'session date' column exists
+                if 'session date' not in df.columns:
+                    df['session date'] = None
+
+                # Locate the row(s) matching the ID (case-insensitive handling)
+                participant_id_clean = participant_id.strip().lower()
+                
+                # Create a boolean mask for the matching ID
+                # Convert column to string, strip whitespace, lower case, compare
+                mask = df['ID'].astype(str).str.strip().str.lower() == participant_id_clean
+                
+                # Apply the date only to matching rows
+                if mask.any():
+                    df.loc[mask, 'session date'] = now_date_str
             
             # Save the new data to the original file path
             df.to_excel(file_path, index=False)
