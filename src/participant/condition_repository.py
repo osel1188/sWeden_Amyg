@@ -1,8 +1,9 @@
 import pandas as pd
 from pathlib import Path
-from typing import Union
-from datetime import datetime  # Added for timestamping
-import shutil                  # Added for file copying
+from typing import Union, Optional
+from datetime import datetime
+import shutil
+import openpyxl  # Added for style-preserving writes
 
 class RepositoryError(Exception):
     """Errors related to Excel data reading or writing."""
@@ -63,13 +64,18 @@ class ConditionRepository:
         existing_rows = df[df_id_as_str == participant_id_clean]
         return existing_rows
 
-    def save_data(self, df: pd.DataFrame, *, archive_previous: bool = True):
+    def save_data(self, df: pd.DataFrame, participant_id: Optional[str] = None, *, archive_previous: bool = True):
         """
         Saves the DataFrame back to the Excel file.
-        Adds a 'session date' column with the current date before saving.
+        Adds/Updates 'session date' for the specific participant row if ID is provided.
         Optionally archives the existing file before overwriting.
         
+        PRESERVES FORMATTING: Uses openpyxl to write values into existing cells 
+        without destroying cell styles (colors).
+        
         :param df: The DataFrame to save.
+        :param participant_id: The specific participant ID to stamp with the current date.
+                               If None, no session date update occurs.
         :param archive_previous: If True (default), copy the existing file
                                  to 'archive_conditions_file/' with a timestamp
                                  before saving.
@@ -89,31 +95,72 @@ class ConditionRepository:
                 
                 # Generate timestamp string
                 now = datetime.now()
-                timestamp = now.strftime("%Y-%m-%d_%H-%M")
+                # MODIFICATION: Added seconds to timestamp format
+                timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
                 
                 # Create new archive filename
-                # (e.g., "my_file_2025-11-07_13-54.xlsx")
                 file_stem = file_path.stem
                 file_suffix = file_path.suffix
                 archive_file_name = f"{file_stem}_{timestamp}{file_suffix}"
                 archive_path = archive_dir / archive_file_name
                 
                 # Copy the existing file to the archive location
-                # shutil.copy2 preserves metadata
                 shutil.copy2(file_path, archive_path)
                 
             except Exception as e:
                 # Catch any archiving error (permissions, disk space, etc.)
                 raise RepositoryError(f"Failed to archive existing file: {e}")
 
-        # 2. Save logic
+        # 2. Update Logic (In-Memory DataFrame)
         try:
-            # MODIFICATION: Add/update the 'session date' column with the current date
-            now_date_str = datetime.now().strftime("%Y-%m-%d")
-            df['session date'] = now_date_str
+            # MODIFICATION: Update 'session date' only for the specific participant_id row
+            if participant_id is not None:
+                now_date_str = datetime.now().strftime("%Y-%m-%d")
+                
+                # Ensure 'session date' column exists
+                if 'session date' not in df.columns:
+                    df['session date'] = None
+
+                # Locate the row(s) matching the ID (case-insensitive handling)
+                participant_id_clean = participant_id.strip().lower()
+                
+                # Create a boolean mask for the matching ID
+                mask = df['ID'].astype(str).str.strip().str.lower() == participant_id_clean
+                
+                # Apply the date only to matching rows
+                if mask.any():
+                    df.loc[mask, 'session date'] = now_date_str
             
-            # Save the new data to the original file path
-            df.to_excel(file_path, index=False)
+            # 3. Save Logic (Preserving Colors using openpyxl)
+            # Load the existing workbook to preserve styles
+            try:
+                wb = openpyxl.load_workbook(file_path)
+                ws = wb.active
+            except FileNotFoundError:
+                # If file doesn't exist, fallback to standard pandas write (no colors to preserve)
+                df.to_excel(file_path, index=False)
+                return
+
+            # Write DataFrame headers to ensure alignment (Row 1)
+            for c_idx, col_name in enumerate(df.columns, 1):
+                cell = ws.cell(row=1, column=c_idx)
+                cell.value = col_name
+                # Note: We do not reset cell.style here
+
+            # Write DataFrame data (Rows 2+)
+            # enumerate(..., 2) starts at row 2 (Excel is 1-indexed, 1 is header)
+            for r_idx, row in enumerate(df.itertuples(index=False), 2):
+                for c_idx, value in enumerate(row, 1):
+                    # Handle NaN/None values for Excel compatibility
+                    if pd.isna(value):
+                        value = None
+                    
+                    cell = ws.cell(row=r_idx, column=c_idx)
+                    cell.value = value
+                    # Crucial: We are modifying .value, but NOT .fill, .font, or .border
+
+            wb.save(file_path)
+
         except PermissionError:
             raise RepositoryError(f"Permission denied. Cannot write to {file_path}.")
         except Exception as e:
