@@ -12,6 +12,7 @@ REM or set the full path to a venv/conda python, e.g.:
 REM   C:\Users\basil\miniconda3\envs\tila\python.exe
 REM   C:\Users\basil\project\.venv\Scripts\python.exe
 set "PYTHON=python"
+set "PYTHONPATH=%PROJECT_ROOT%\src"
 
 REM --- Launch ---
 cd /d "%PROJECT_ROOT%"
