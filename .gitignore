@@ -22,3 +22,4 @@ src_bckp copy/*
 ti_gui.log
 .vscode/launch.json
 /TILA_DATA_API_TEST
+CLAUDE.md
