@@ -31,11 +31,11 @@ The 70 TILA sessions each produce voltage timeline plots (`plot_voltages.py`), b
 
 ## Success Criteria
 
-- [ ] Script processes all 70 sessions and produces `interval_summary.csv`
-- [ ] CSV contains ~560 rows (70 sessions x 2 intervals x 4 channels) with edge cases flagged
-- [ ] Duration figure shows strip plot + mean/STD for all 4 channels, split by Block 1 and Block 2
-- [ ] Voltage figure shows same layout for median voltage
-- [ ] Edge-case sessions (!=2 blocks) are handled gracefully with status flags
+- [x] Script processes all 70 sessions and produces `interval_summary.csv`
+- [x] CSV contains ~560 rows (70 sessions x 2 intervals x 4 channels) with edge cases flagged
+- [x] Duration figure shows strip plot + mean/STD for all 4 channels, split by Block 1 and Block 2
+- [x] Voltage figure shows same layout for median voltage
+- [x] Edge-case sessions (!=2 blocks) are handled gracefully with status flags
 
 ---
 
@@ -79,10 +79,10 @@ backlogs_local_data/
 **Goal:** Implement interval detection algorithm and per-channel stats extraction
 
 **Tasks:**
-- [ ] Task 1.1 — Implement `load_session(csv_path)`: read CSV, parse timestamps, return DataFrame
-- [ ] Task 1.2 — Implement `detect_active_intervals(df, threshold=0.5)`: union approach, return list of `(start, end)` tuples filtered to >5 min
-- [ ] Task 1.3 — Implement `classify_intervals(intervals)`: assign Block 1 (shorter) and Block 2 (longer); handle edge cases (merge <2 min gaps, handle 1 or 3+ blocks)
-- [ ] Task 1.4 — Implement `extract_channel_stats(df, start, end, channels)`: per-channel duration above threshold + time-weighted median voltage via 1-second resampling
+- [x] Task 1.1 — Implement `load_session(csv_path)`: read CSV, parse timestamps, return DataFrame
+- [x] Task 1.2 — Implement `detect_active_intervals(df, threshold=0.5)`: union approach, return list of `(start, end)` tuples filtered to >5 min
+- [x] Task 1.3 — Implement `classify_intervals(intervals)`: assign Block 1 (shorter) and Block 2 (longer); handle edge cases (merge <2 min gaps, handle 1 or 3+ blocks)
+- [x] Task 1.4 — Implement `extract_channel_stats(df, start, end, channels)`: per-channel duration above threshold + time-weighted median voltage via 1-second resampling
 
 **Files Modified:**
 - `scripts/analyse_intervals.py` — New file, all core functions
@@ -93,9 +93,9 @@ backlogs_local_data/
 **Goal:** Run analysis across all 70 sessions and produce summary CSV
 
 **Tasks:**
-- [ ] Task 2.1 — Implement `analyse_all_sessions(preprocess_dir)`: iterate all `*/voltages.csv`, call core functions, collect results
-- [ ] Task 2.2 — Implement `main()`: orchestrate analysis, create output directory, save CSV, print console summary with counts
-- [ ] Task 2.3 — Handle edge cases: print warnings for sessions with !=2 blocks, set `status` column (ok/merged/single_block/skipped)
+- [x] Task 2.1 — Implement `analyse_all_sessions(preprocess_dir)`: iterate all `*/voltages.csv`, call core functions, collect results
+- [x] Task 2.2 — Implement `main()`: orchestrate analysis, create output directory, save CSV, print console summary with counts
+- [x] Task 2.3 — Handle edge cases: print warnings for sessions with !=2 blocks, set `status` column (ok/merged/single_block/skipped)
 
 **Files Modified:**
 - `scripts/analyse_intervals.py` — Add batch processing and main entry point
@@ -106,10 +106,10 @@ backlogs_local_data/
 **Goal:** Generate cross-session comparison figures
 
 **Tasks:**
-- [ ] Task 3.1 — Implement `plot_strip_comparison(summary_df, metric, ylabel, title, output_path)`: reusable function for strip plot + mean line + shaded ±1 STD band, with 2 subplots (Block 1 left, Block 2 right), 4 channel groups per subplot
-- [ ] Task 3.2 — Add text annotations showing `mean ± std` per channel group
-- [ ] Task 3.3 — Call for both duration (`duration_min`, "Duration (min)") and voltage (`median_voltage`, "Median Voltage (V)")
-- [ ] Task 3.4 — Add slight horizontal jitter on strip points to avoid overlap
+- [x] Task 3.1 — Implement `plot_strip_comparison(summary_df, metric, ylabel, title, output_path)`: reusable function for strip plot + mean line + shaded ±1 STD band, with 2 subplots (Block 1 left, Block 2 right), 4 channel groups per subplot
+- [x] Task 3.2 — Add text annotations showing `mean ± std` per channel group
+- [x] Task 3.3 — Call for both duration (`duration_min`, "Duration (min)") and voltage (`median_voltage`, "Median Voltage (V)")
+- [x] Task 3.4 — Add slight horizontal jitter on strip points to avoid overlap
 
 **Files Modified:**
 - `scripts/analyse_intervals.py` — Add plotting function and calls in `main()`
