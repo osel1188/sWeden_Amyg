@@ -24,7 +24,6 @@ Experiment log files in `backlogs_local_data/TILA_DATA_VALID/` contain valuable 
 4. Process all 50+ log files across `TILA_DATA_VALID`
 
 ### Out of Scope
-- Parsing the older `keysight_edu_comms.csv` format (pre-log sessions like T27)
 - Reconstructing actual instantaneous voltages during ramps (only target voltages are logged)
 - Generating SESSION_OVERVIEW.md files (those are manually curated)
 - Aggregating data across sessions into a single file
@@ -35,6 +34,8 @@ Experiment log files in `backlogs_local_data/TILA_DATA_VALID/` contain valuable 
 - [ ] Batch mode processes all log files without errors
 - [ ] Voltage values match raw log after rounding (e.g., `4.299999999999999` → `4.3`)
 - [ ] Metadata JSON contains all fields: protocol, frequencies, generator SNs, safety limit, timing, counts
+
+**Phase 2:** CSV format support added in `docs/development/plans/active/csv-data-extractor.md`
 
 ---
 
@@ -181,13 +182,16 @@ Only the `manager` logger ramp lines are captured (not the `root` logger duplica
 ### Phase 1: Create `scripts/extract_log_data.py`
 **Goal:** Complete working script with all extraction and output logic
 
+**Started:** 2026-03-18
+**Completed:** 2026-03-18
+
 **Tasks:**
-- [ ] Task 1.1 — Imports and module-level regex constants
-- [ ] Task 1.2 — `parse_log_file(path) -> dict`: single-pass line parser returning `{"metadata": {...}, "ramp_events": [...]}`
-- [ ] Task 1.3 — `build_voltage_df(ramp_events) -> pd.DataFrame`: convert ramp events to wide-format with channel state tracking
-- [ ] Task 1.4 — `collect_log_files(input_path) -> list[tuple[str, Path]]`: resolve input to (session_name, log_path) pairs, filter "copy" files
-- [ ] Task 1.5 — `main()`: argparse, iterate sessions, write `voltages.csv` + `metadata.json` per session, print summary
-- [ ] Task 1.6 — Timestamp formatting (`,` → `.`), voltage rounding to 1dp
+- [x] Task 1.1 — Imports and module-level regex constants
+- [x] Task 1.2 — `parse_log_file(path) -> dict`: single-pass line parser returning `{"metadata": {...}, "ramp_events": [...]}`
+- [x] Task 1.3 — `build_voltage_df(ramp_events) -> pd.DataFrame`: convert ramp events to wide-format with channel state tracking
+- [x] Task 1.4 — `collect_log_files(input_path) -> list[tuple[str, Path]]`: resolve input to (session_name, log_path) pairs, filter "copy" files
+- [x] Task 1.5 — `main()`: argparse, iterate sessions, write `voltages.csv` + `metadata.json` per session, print summary
+- [x] Task 1.6 — Timestamp formatting (`,` → `.`), voltage rounding to 1dp
 
 **Files Modified:**
 - `scripts/extract_log_data.py` — **NEW** (~250 lines)
