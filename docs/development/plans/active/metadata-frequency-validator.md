@@ -81,13 +81,13 @@ def is_valid(condition, a1, a2, b1, b2):
 ### Phase 1: Single script
 **Goal:** Complete working script
 
-- [ ] Create `scripts/validate_metadata.py`
-- [ ] Read Excel with pandas, extract ID and condition columns
-- [ ] Glob metadata files, parse JSON, extract frequencies (both formats)
-- [ ] Match participants between Excel and metadata by ID
-- [ ] Apply validation rules
-- [ ] Output CSV report
-- [ ] Print summary (total, valid, invalid counts)
+- [x] Create `scripts/validate_metadata.py`
+- [x] Read Excel with pandas, extract ID and condition columns
+- [x] Glob metadata files, parse JSON, extract frequencies (both formats)
+- [x] Match participants between Excel and metadata by ID
+- [x] Apply validation rules
+- [x] Output CSV report
+- [x] Print summary (total, valid, invalid counts)
 
 **Files Created:**
 - `scripts/validate_metadata.py` — The validation script
