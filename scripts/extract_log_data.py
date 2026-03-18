@@ -36,6 +36,19 @@ RAMP_RE = re.compile(
     r"([\d.]+(?:e[+-]?\d+)?)V at ([\d.]+) V/s\."
 )
 
+# system.py _execute_ramp completion: all-channel voltage snapshot
+RAMP_FINISHED_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2},\d{3}) .+ "
+    r"Ramp finished in [\d.]+s\. Final Voltages: \[(.+?)\]"
+)
+
+# system.py _threaded_ramp_single_channel_task: ramp-start with holding state
+RAMP_DETAIL_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2},\d{3}) .+ "
+    r"Region .+?: Ramping (\w+) from ([\d.]+)V to ([\d.]+)V "
+    r"\(([\d.]+)s\)\. Holding: \[(.+?)\]\."
+)
+
 # system.py:191
 FREQ_RE = re.compile(
     r"Region (.+?)'s (\w+) side frequencies set to: "
@@ -144,6 +157,38 @@ def parse_log_file(path: Path) -> dict:
                     metadata["ramp_rate_v_per_s"] = rate
                 continue
 
+            # Ramp finished: ground-truth all-channel voltage snapshot
+            m = RAMP_FINISHED_RE.match(line)
+            if m:
+                date, time = m.group(1), m.group(2)
+                for channel, voltage in _parse_voltage_list(m.group(3)):
+                    ramp_events.append({
+                        "date": date,
+                        "time": time,
+                        "channel": channel,
+                        "voltage": voltage,
+                    })
+                continue
+
+            # Ramp detail: ramp-start state (ramping channel FROM voltage + held channels)
+            m = RAMP_DETAIL_RE.match(line)
+            if m:
+                date, time = m.group(1), m.group(2)
+                ramp_events.append({
+                    "date": date,
+                    "time": time,
+                    "channel": m.group(3),
+                    "voltage": round(float(m.group(4)), 1),
+                })
+                for channel, voltage in _parse_holding_list(m.group(7)):
+                    ramp_events.append({
+                        "date": date,
+                        "time": time,
+                        "channel": channel,
+                        "voltage": voltage,
+                    })
+                continue
+
             # Protocol condition
             m = PROTOCOL_CONDITION_RE.search(line)
             if m:
@@ -219,6 +264,9 @@ def parse_log_file(path: Path) -> dict:
                 metadata["ramp_durations_s"][side] = entry
                 continue
 
+    # Sort ramp events chronologically (events from different sources may interleave)
+    ramp_events.sort(key=lambda e: (e["date"], e["time"]))
+
     # Build generator info from channel_map and serials
     # Group channels by driver
     driver_channels: dict[str, list[str]] = {}
@@ -234,9 +282,9 @@ def parse_log_file(path: Path) -> dict:
         region = None
         for s_id, s_region in metadata["systems"].items():
             # Check if any channel of this driver belongs to this system
-            # by looking at ramp events
+            # by looking at ramp events (only events that have system info)
             for ev in ramp_events:
-                if ev["channel"] in channels and ev["system"] == s_id:
+                if ev["channel"] in channels and ev.get("system") == s_id:
                     sys_id = s_id
                     region = s_region
                     break
@@ -262,6 +310,26 @@ def parse_log_file(path: Path) -> dict:
     metadata["ramp_event_count"] = len(ramp_events)
 
     return {"metadata": metadata, "ramp_events": ramp_events}
+
+
+def _parse_voltage_list(s: str) -> list[tuple[str, float]]:
+    """Parse 'A1: 1.00V, A2: 0.00V' into [(channel, voltage), ...]."""
+    pairs = []
+    for item in s.split(", "):
+        m = re.match(r"(\w+): ([\d.]+)V", item.strip())
+        if m:
+            pairs.append((m.group(1), round(float(m.group(2)), 1)))
+    return pairs
+
+
+def _parse_holding_list(s: str) -> list[tuple[str, float]]:
+    """Parse 'A2 at 0.00V, B1 at 1.00V' into [(channel, voltage), ...]."""
+    pairs = []
+    for item in s.split(", "):
+        m = re.match(r"(\w+) at ([\d.]+)V", item.strip())
+        if m:
+            pairs.append((m.group(1), round(float(m.group(2)), 1)))
+    return pairs
 
 
 def _extract_driver_serials(path: Path) -> dict[str, str]:
@@ -469,8 +537,8 @@ def build_voltage_df(ramp_events: list[dict], round_digits: int | None = None) -
 # File collection
 # ---------------------------------------------------------------------------
 
-DEFAULT_INPUT = Path("backlogs_local_data/TILA_DATA_VALID")
-DEFAULT_OUTPUT = Path("backlogs_local_data/TILA_DATA_EXTRACTED")
+DEFAULT_INPUT = Path("backlogs_local_data/TILA_DATA_0_primary")
+DEFAULT_OUTPUT = Path("backlogs_local_data/TILA_DATA_1_processed")
 
 
 def collect_sessions(input_path: Path) -> list[tuple[str, str, Path]]:
