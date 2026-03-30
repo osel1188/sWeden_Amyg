@@ -10,10 +10,10 @@ Produces per-session output:
   - metadata.json — session overview, hardware config, protocol parameters
 
 Usage:
-    python scripts/extract_log_data.py                              # batch: all TILA_DATA_VALID
-    python scripts/extract_log_data.py path/to/file.log             # single .log file
-    python scripts/extract_log_data.py path/to/session_folder/      # single session (auto-detect format)
-    python scripts/extract_log_data.py -o custom_output/            # custom output dir
+    python scripts/analysis/03_extract_session_data.py                              # batch: all TILA_DATA_0_primary
+    python scripts/analysis/03_extract_session_data.py path/to/file.log             # single .log file
+    python scripts/analysis/03_extract_session_data.py path/to/session_folder/      # single session (auto-detect format)
+    python scripts/analysis/03_extract_session_data.py -o custom_output/            # custom output dir
 """
 
 import re
@@ -40,13 +40,6 @@ RAMP_RE = re.compile(
 RAMP_FINISHED_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2},\d{3}) .+ "
     r"Ramp finished in [\d.]+s\. Final Voltages: \[(.+?)\]"
-)
-
-# system.py _threaded_ramp_single_channel_task: ramp-start with holding state
-RAMP_DETAIL_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2},\d{3}) .+ "
-    r"Region .+?: Ramping (\w+) from ([\d.]+)V to ([\d.]+)V "
-    r"\(([\d.]+)s\)\. Holding: \[(.+?)\]\."
 )
 
 # system.py:191
@@ -140,21 +133,11 @@ def parse_log_file(path: Path) -> dict:
             if " - ERROR - " in line:
                 error_count += 1
 
-            # Ramp commands (manager only)
+            # Ramp commands (manager only) — metadata only, not a voltage event
             m = RAMP_RE.match(line)
             if m:
-                voltage = round(float(m.group(5)), 1)
-                rate = float(m.group(6))
-                ramp_events.append({
-                    "date": m.group(1),
-                    "time": m.group(2),
-                    "channel": m.group(3),
-                    "system": m.group(4),
-                    "voltage": voltage,
-                    "rate": rate,
-                })
                 if metadata["ramp_rate_v_per_s"] is None:
-                    metadata["ramp_rate_v_per_s"] = rate
+                    metadata["ramp_rate_v_per_s"] = float(m.group(6))
                 continue
 
             # Ramp finished: ground-truth all-channel voltage snapshot
@@ -162,25 +145,6 @@ def parse_log_file(path: Path) -> dict:
             if m:
                 date, time = m.group(1), m.group(2)
                 for channel, voltage in _parse_voltage_list(m.group(3)):
-                    ramp_events.append({
-                        "date": date,
-                        "time": time,
-                        "channel": channel,
-                        "voltage": voltage,
-                    })
-                continue
-
-            # Ramp detail: ramp-start state (ramping channel FROM voltage + held channels)
-            m = RAMP_DETAIL_RE.match(line)
-            if m:
-                date, time = m.group(1), m.group(2)
-                ramp_events.append({
-                    "date": date,
-                    "time": time,
-                    "channel": m.group(3),
-                    "voltage": round(float(m.group(4)), 1),
-                })
-                for channel, voltage in _parse_holding_list(m.group(7)):
                     ramp_events.append({
                         "date": date,
                         "time": time,
@@ -317,16 +281,6 @@ def _parse_voltage_list(s: str) -> list[tuple[str, float]]:
     pairs = []
     for item in s.split(", "):
         m = re.match(r"(\w+): ([\d.]+)V", item.strip())
-        if m:
-            pairs.append((m.group(1), round(float(m.group(2)), 1)))
-    return pairs
-
-
-def _parse_holding_list(s: str) -> list[tuple[str, float]]:
-    """Parse 'A2 at 0.00V, B1 at 1.00V' into [(channel, voltage), ...]."""
-    pairs = []
-    for item in s.split(", "):
-        m = re.match(r"(\w+) at ([\d.]+)V", item.strip())
         if m:
             pairs.append((m.group(1), round(float(m.group(2)), 1)))
     return pairs
@@ -659,6 +613,7 @@ def main() -> None:
             "source_file": source_path.name,
             "source_format": fmt,
             "ramp_event_count": metadata["ramp_event_count"],
+            "timeseries_interpolation": "zero_order_hold",
         }
 
         if fmt == "log":
@@ -680,7 +635,9 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         out_csv = out_dir / "voltages.csv"
-        df.to_csv(out_csv, index=False)
+        with open(out_csv, "w", encoding="utf-8", newline="") as f:
+            f.write("# interpolation: zero_order_hold\n")
+            df.to_csv(f, index=False)
 
         json_path = out_dir / "metadata.json"
         json_path.write_text(

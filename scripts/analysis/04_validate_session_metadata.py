@@ -20,7 +20,7 @@ import pandas as pd
 BACKLOGS = Path(__file__).resolve().parent.parent / "backlogs_local_data"
 EXCEL_PATH = BACKLOGS / "Excel_for_stimulators.xlsx"
 PROCESSED_DIR = BACKLOGS / "TILA_DATA_1_processed"
-OUTPUT_CSV = BACKLOGS / "metadata_validation_report.csv"
+OUTPUT_CSV = BACKLOGS / "condition_validation_report.csv"
 
 
 def load_conditions(excel_path: Path) -> dict[str, str]:
