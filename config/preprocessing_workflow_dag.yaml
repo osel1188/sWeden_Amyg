@@ -1,0 +1,30 @@
+parameters:
+  # Add workflow-specific parameters here
+  # example_param: value
+
+tasks:
+  filter_valid_sessions:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+  split_log_by_day:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [filter_valid_sessions]
+  extract_session_data:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [split_log_by_day]
+  validate_session_metadata:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [extract_session_data]
+  tag_voltage_intervals:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [validate_session_metadata]
