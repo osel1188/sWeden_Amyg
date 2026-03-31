@@ -1,0 +1,20 @@
+parameters:
+  # Add workflow-specific parameters here
+  # example_param: value
+
+tasks:
+  plot_session_voltages:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+  analyse_stim_intervals:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+  sex_based_voltage_analysis:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [analyse_stim_intervals]
