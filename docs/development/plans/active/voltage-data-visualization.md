@@ -13,7 +13,7 @@ Create a script that generates per-session voltage timeline plots from the prepr
 
 ## Problem Statement
 
-The `extract_log_data.py` script (Phase 1 of log-data-extractor) produces `voltages.csv` files per session, but there is no way to visually inspect the voltage profiles across sessions. A batch visualization script is needed to generate figures for all 48+ sessions for quality checks and analysis.
+The `03_extract_session_data.py` script (Phase 1 of log-data-extractor) produces `voltages.csv` files per session, but there is no way to visually inspect the voltage profiles across sessions. A batch visualization script is needed to generate figures for all 48+ sessions for quality checks and analysis.
 
 ## Goals
 
@@ -62,16 +62,18 @@ No architectural changes. Single new script file.
 
 ### Phase 1: Create visualization script
 **Goal:** Batch-generate voltage timeline plots for all session CSVs
+**Started:** 2026-03-18
+**Completed:** 2026-03-18
 
-- [ ] Create `scripts/plot_voltages.py`
-- [ ] Read all `voltages.csv` files from `backlogs_local_data/TILA_DATA_preprocess/*/`
-- [ ] For each CSV: parse timestamps, plot A1/A2/B1/B2 vs time
-- [ ] Configure plot: Y-axis 0–8V, legend, title = folder name, axis labels
-- [ ] Save each figure to `backlogs_local_data/TILA_DATA_analysis/{folder_name}_voltages.png`
-- [ ] Create output directory if it doesn't exist
+- [x] Create `scripts/analysis/05_plot_session_voltages.py`
+- [x] Read all `voltages.csv` files from `backlogs_local_data/TILA_DATA_preprocess/*/`
+- [x] For each CSV: parse timestamps, plot A1/A2/B1/B2 vs time
+- [x] Configure plot: Y-axis 0–8V, legend, title = folder name, axis labels
+- [x] Save each figure to `backlogs_local_data/TILA_DATA_analysis/{folder_name}_voltages.png`
+- [x] Create output directory if it doesn't exist
 
 **Files Created:**
-- `scripts/plot_voltages.py` — Main visualization script
+- `scripts/analysis/05_plot_session_voltages.py` — Main visualization script
 
 **Dependencies:** None (uses pandas + matplotlib, both available in the `ti` conda env)
 
@@ -86,7 +88,7 @@ No architectural changes. Single new script file.
 ## Testing Plan
 
 ### Manual Verification
-- [ ] Run `python scripts/plot_voltages.py` — completes without errors
+- [ ] Run `python scripts/analysis/05_plot_session_voltages.py` — completes without errors
 - [ ] Verify 48 PNG files exist in `backlogs_local_data/TILA_DATA_analysis/`
 - [ ] Open 2–3 PNGs and confirm: 4 traces visible, legend correct, Y-axis is 0–8V, title matches session
 - [ ] Check that voltage values in the plot visually match the CSV data (spot-check one session)
@@ -105,7 +107,7 @@ No architectural changes. Single new script file.
 
 ## Rollback Plan
 
-1. Delete `scripts/plot_voltages.py`
+1. Delete `scripts/analysis/05_plot_session_voltages.py`
 2. Delete `backlogs_local_data/TILA_DATA_analysis/` directory
 
 ---
