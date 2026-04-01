@@ -322,56 +322,62 @@ def parse_csv_session(session_dir: Path) -> dict:
     csv_files = sorted(session_dir.glob("*keysight_edu_comms.csv"))
     if not csv_files:
         raise FileNotFoundError(f"No keysight_edu_comms.csv in {session_dir}")
-    csv_path = csv_files[0]
 
     ramp_events: list[dict] = []
     frequencies: dict[str, float] = {}
     serials: dict[str, str] = {}
 
-    with open(csv_path, "r", encoding="utf-8", errors="replace", newline="") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if len(row) < 4:
-                continue
-            ts_raw, command, device_name, resource = row[0], row[1], row[2], row[3]
+    for csv_path in csv_files:
+        with open(csv_path, "r", encoding="utf-8", errors="replace", newline="") as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            for row in reader:
+                if len(row) < 4:
+                    continue
+                ts_raw, command, device_name, resource = row[0], row[1], row[2], row[3]
 
-            if device_name not in serials:
-                m = CSV_SERIAL_RE.search(resource)
+                if device_name not in serials:
+                    m = CSV_SERIAL_RE.search(resource)
+                    if m:
+                        serials[device_name] = m.group(1)
+
+                ts_m = re.match(r"(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})-(\d{3})", ts_raw)
+                if not ts_m:
+                    continue
+                date = ts_m.group(1)
+                time = f"{ts_m.group(2)}:{ts_m.group(3)}:{ts_m.group(4)}.{ts_m.group(5)}"
+
+                m = CSV_VOLTAGE_RE.search(command)
                 if m:
-                    serials[device_name] = m.group(1)
+                    src_num, voltage_str = m.group(1), m.group(2)
+                    channel = CSV_CHANNEL_MAP.get((device_name, src_num))
+                    if channel:
+                        ramp_events.append({
+                            "date": date,
+                            "time": time,
+                            "channel": channel,
+                            "voltage": voltage_str,
+                        })
+                    continue
 
-            ts_m = re.match(r"(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})-(\d{3})", ts_raw)
-            if not ts_m:
-                continue
-            date = ts_m.group(1)
-            time = f"{ts_m.group(2)}:{ts_m.group(3)}:{ts_m.group(4)}.{ts_m.group(5)}"
-
-            m = CSV_VOLTAGE_RE.search(command)
-            if m:
-                src_num, voltage_str = m.group(1), m.group(2)
-                channel = CSV_CHANNEL_MAP.get((device_name, src_num))
-                if channel:
-                    ramp_events.append({
-                        "date": date,
-                        "time": time,
-                        "channel": channel,
-                        "voltage": voltage_str,
-                    })
-                continue
-
-            m = CSV_APPLY_RE.search(command)
-            if m:
-                src_num, freq_str = m.group(1), m.group(2)
-                channel = CSV_CHANNEL_MAP.get((device_name, src_num))
-                if channel and channel not in frequencies:
-                    frequencies[channel] = _parse_num(freq_str)
+                m = CSV_APPLY_RE.search(command)
+                if m:
+                    src_num, freq_str = m.group(1), m.group(2)
+                    channel = CSV_CHANNEL_MAP.get((device_name, src_num))
+                    if channel and channel not in frequencies:
+                        frequencies[channel] = _parse_num(freq_str)
 
     time_start = f"{ramp_events[0]['date']} {ramp_events[0]['time']}" if ramp_events else None
     time_end = f"{ramp_events[-1]['date']} {ramp_events[-1]['time']}" if ramp_events else None
 
     gui_files = sorted(session_dir.glob("*gui_status_messages.csv"))
-    gui_data = _parse_gui_status(gui_files[0]) if gui_files else {"target_voltages": None, "condition": None}
+    gui_data: dict = {"target_voltages": None, "condition": None}
+    for gui_path in gui_files:
+        file_data = _parse_gui_status(gui_path)
+        if file_data["target_voltages"] is not None:
+            gui_data["target_voltages"] = file_data["target_voltages"]
+        if file_data["condition"] is not None:
+            gui_data["condition"] = file_data["condition"]
     participant_data = _parse_participant_txt(session_dir)
 
     device_channel_map = {
@@ -406,6 +412,7 @@ def parse_csv_session(session_dir: Path) -> dict:
         "time_end": time_end,
         "total_rows": len(ramp_events),
         "ramp_event_count": len(ramp_events),
+        "source_files": [f.name for f in csv_files],
     }
 
     return {"metadata": metadata, "ramp_events": ramp_events}
@@ -539,7 +546,7 @@ def _process_session(
         "frequencies": metadata["frequencies"],
         "default_target_voltages": metadata["default_target_voltages"],
         "ramp_durations_s": metadata["ramp_durations_s"],
-        "source_file": source_path.name,
+        "source_file": metadata.get("source_files", source_path.name) if fmt == "csv" else source_path.name,
         "source_format": fmt,
         "ramp_event_count": metadata["ramp_event_count"],
         "timeseries_interpolation": "zero_order_hold",
