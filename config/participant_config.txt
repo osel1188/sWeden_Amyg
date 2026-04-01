@@ -1,4 +1,4 @@
-#participants_list_file_path = C:/Users/basdu83/Documents/TILA_DATA/participant_infos.xlsx
-participants_list_file_path = C:/Users/basdu83/OneDrive - Linköpings universitet/_Teams/TILA/session_files/participant_infos.xlsx
-condition_file_path = C:/Users/basdu83/OneDrive - Linköpings universitet/_Teams/TILA/session_files/Excel_for_stimulators.xlsx
-save_dir_base_path = C:/Users/basdu83/Documents/TILA_DATA
+participants_list_file_path = F:\GitHub\sWeden_Amyg\cfg\participant_infos.xlsx
+condition_file_path = F:\GitHub\sWeden_Amyg\cfg\Excel_for_stimulators.xlsx
+save_dir_base_path = F:\GitHub\sWeden_Amyg\data
+

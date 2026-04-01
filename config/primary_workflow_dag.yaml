@@ -1,0 +1,16 @@
+parameters:
+  # TODO: Add workflow-specific parameters here
+  # project_root: "/path/to/data"
+
+tasks:
+  split_log_by_day:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+
+  task_two:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [split_log_by_day]

@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where python:*)",
+      "Bash(conda info:*)",
+      "Read(//c/Users/basil/miniconda3/**)",
+      "Read(//c/Users/basil/anaconda3/**)",
+      "Bash(py -0)",
+      "Read(//c/Users/basil//**)",
+      "Bash(mkdir -p F:/GitHub/sWeden_Amyg/scripts/analysis)",
+      "Bash(git -C F:/GitHub/sWeden_Amyg mv scripts/split_log.py scripts/analysis/split_log.py)",
+      "Bash(git -C F:/GitHub/sWeden_Amyg mv scripts/copy_valid_tila_data.py scripts/analysis/copy_valid_tila_data.py)",
+      "Bash(git -C F:/GitHub/sWeden_Amyg mv scripts/extract_log_data.py scripts/analysis/extract_log_data.py)",
+      "Bash(git -C F:/GitHub/sWeden_Amyg mv scripts/plot_voltages.py scripts/analysis/plot_voltages.py)",
+      "Bash(mv F:/GitHub/sWeden_Amyg/scripts/split_log.py F:/GitHub/sWeden_Amyg/scripts/analysis/)",
+      "Bash(mv F:/GitHub/sWeden_Amyg/scripts/copy_valid_tila_data.py F:/GitHub/sWeden_Amyg/scripts/analysis/)",
+      "Bash(mv F:/GitHub/sWeden_Amyg/scripts/extract_log_data.py F:/GitHub/sWeden_Amyg/scripts/analysis/)",
+      "Bash(mv F:/GitHub/sWeden_Amyg/scripts/plot_voltages.py F:/GitHub/sWeden_Amyg/scripts/analysis/)",
+      "Bash(mv F:/GitHub/sWeden_Amyg/scripts/validate_metadata.py F:/GitHub/sWeden_Amyg/scripts/analysis/)",
+      "Bash(git:*)",
+      "WebSearch"
+    ]
+  }
+}
