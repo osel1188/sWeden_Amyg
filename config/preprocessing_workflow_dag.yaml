@@ -12,7 +12,7 @@ tasks:
   extract_session_data:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [filter_valid_sessions]
 
   validate_session_metadata:
@@ -24,7 +24,7 @@ tasks:
   resample_voltages:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [extract_session_data]
 
   tag_voltage_intervals:

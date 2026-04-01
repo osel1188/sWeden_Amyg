@@ -1,4 +1,4 @@
-"""Tag stimulation intervals per channel in voltage timeseries.
+"""Tag stimulation intervals per channel in regularly-sampled voltage timeseries.
 
 Task contract:
     run_tag_voltage_intervals(input_items, output_dir, force=False) -> list[Path]
@@ -11,7 +11,12 @@ force:        when True, retag sessions whose outputs already exist.
 
 Returns a list of voltages_tagged.csv Paths produced.
 
-Algorithm (unchanged from 04_05_tag_voltage_intervals.py):
+Input format:
+    voltages_resampled.csv files produced by resample_voltages.py.  The header
+    must contain a ``# sampling_rate_hz: <value>`` comment line; the function
+    raises ValueError if it is absent (re-run resample_voltages --force).
+
+Algorithm:
   1. Find all contiguous blocks where voltage > 3V.
   2. Merge adjacent blocks unless separated by a sustained near-zero gap
      (<=0.01V for >=10 min).
@@ -90,6 +95,25 @@ class CommentedCsvReader:
         df = df.sort_values("timestamp").reset_index(drop=True)
         return comments, df
 
+    @staticmethod
+    def parse_sampling_rate(comments: list[str]) -> float:
+        """Extract ``sampling_rate_hz`` from comment header lines.
+
+        Raises:
+            ValueError: if the header is absent or the value cannot be parsed.
+                        Re-run ``resample_voltages --force`` to regenerate input files.
+        """
+        for line in comments:
+            if line.startswith("# sampling_rate_hz:"):
+                try:
+                    return float(line.split(":", 1)[1].strip())
+                except ValueError:
+                    raise ValueError(f"Malformed sampling_rate_hz header: {line!r}")
+        raise ValueError(
+            "No '# sampling_rate_hz:' header found in input file. "
+            "Re-run resample_voltages --force to regenerate."
+        )
+
 
 class CommentedCsvWriter:
     """Writes a DataFrame to CSV, prepending preserved comment lines."""
@@ -105,18 +129,23 @@ class CommentedCsvWriter:
 
 
 # ---------------------------------------------------------------------------
-# Core tagger (unchanged from 04_05_tag_voltage_intervals.py)
+# Core tagger
 # ---------------------------------------------------------------------------
 
 
 class IntervalTagger:
-    """Detects and tags stimulation intervals in voltage timeseries data."""
+    """Detects and tags stimulation intervals in regularly-sampled voltage timeseries."""
 
-    def __init__(self, cfg: TagConfig) -> None:
+    def __init__(self, cfg: TagConfig, fs: float) -> None:
         self._cfg = cfg
+        self._fs = fs
+        self._sample_period = 1.0 / fs
 
     def tag(self, df: pd.DataFrame) -> SessionResult:
-        """Tag all channel intervals and consensus on *df* (mutates in place)."""
+        """Tag all channel intervals and consensus on *df* in place.
+
+        Durations and gaps are computed using index arithmetic at ``self._fs`` Hz.
+        """
         channel_results: list[ChannelResult] = []
         for ch in self._cfg.channels:
             count = self._tag_channel(df, ch)
@@ -137,14 +166,13 @@ class IntervalTagger:
             return 0
 
         raw_blocks = self._find_raw_on_blocks(df[channel])
-        merged = self._merge_blocks_by_gap(raw_blocks, df[channel], df["timestamp"])
+        merged = self._merge_blocks_by_gap(raw_blocks, df[channel])
 
-        min_seconds = self._cfg.min_duration_min * 60
+        min_samples = int(self._cfg.min_duration_min * 60 * self._fs)
         blocks = [
             (s, e)
             for s, e in merged
-            if (df["timestamp"].iloc[e] - df["timestamp"].iloc[s]).total_seconds()
-            >= min_seconds
+            if (e - s) >= min_samples
         ]
 
         for idx, (s, e) in enumerate(blocks, start=1):
@@ -169,39 +197,27 @@ class IntervalTagger:
     def _has_sustained_zero_gap(
         self,
         series: pd.Series,
-        timestamps: pd.Series,
         gap_start: int,
         gap_end: int,
     ) -> bool:
+        """Return True if [gap_start, gap_end] contains a sustained near-zero run.
+
+        Uses sample counting against ``self._fs`` rather than timestamp arithmetic.
+        """
         if gap_start >= gap_end:
             return False
 
         zero = self._cfg.zero_threshold
-        min_gap_seconds = self._cfg.min_gap_min * 60
+        min_gap_samples = int(self._cfg.min_gap_min * 60 * self._fs)
 
-        run_start: int | None = None
+        run_len = 0
         for i in range(gap_start, gap_end + 1):
             if series.iloc[i] <= zero:
-                if run_start is None:
-                    run_start = i
+                run_len += 1
+                if run_len >= min_gap_samples:
+                    return True
             else:
-                if run_start is not None:
-                    duration = (
-                        timestamps.iloc[i] - timestamps.iloc[run_start]
-                    ).total_seconds()
-                    if duration >= min_gap_seconds:
-                        return True
-                    run_start = None
-
-        if run_start is not None:
-            end_ts = (
-                timestamps.iloc[gap_end]
-                if gap_end < len(series)
-                else timestamps.iloc[len(series) - 1]
-            )
-            duration = (end_ts - timestamps.iloc[run_start]).total_seconds()
-            if duration >= min_gap_seconds:
-                return True
+                run_len = 0
 
         return False
 
@@ -209,15 +225,15 @@ class IntervalTagger:
         self,
         blocks: list[tuple[int, int]],
         series: pd.Series,
-        timestamps: pd.Series,
     ) -> list[tuple[int, int]]:
+        """Merge adjacent blocks that are not separated by a sustained zero gap."""
         if not blocks:
             return []
 
         merged = [blocks[0]]
         for s_j, e_j in blocks[1:]:
             s_i, e_i = merged[-1]
-            if self._has_sustained_zero_gap(series, timestamps, e_i, s_j):
+            if self._has_sustained_zero_gap(series, e_i, s_j):
                 merged.append((s_j, e_j))
             else:
                 merged[-1] = (s_i, e_j)
@@ -431,10 +447,8 @@ def run_tag_voltage_intervals(
         return []
 
     cfg = TagConfig()
-    tagger = IntervalTagger(cfg)
     reader = CommentedCsvReader()
     writer = CommentedCsvWriter()
-    plotter = IntervalPlotSaver(cfg) if save_plot else None
 
     results: List[Path] = []
 
@@ -456,6 +470,9 @@ def run_tag_voltage_intervals(
         clean_task_outputs([tagged_csv] + extra_outputs)
 
         comments, df = reader.read(csv_path)
+        fs = CommentedCsvReader.parse_sampling_rate(comments)
+        tagger = IntervalTagger(cfg, fs=fs)
+        plotter = IntervalPlotSaver(cfg) if save_plot else None
         result = tagger.tag(df)
         result = SessionResult(
             session_name=session_name,
