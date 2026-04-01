@@ -9,7 +9,7 @@
 
 ## Overview
 
-Extend `scripts/extract_log_data.py` to also parse the older `keysight_edu_comms.csv` format used by 22 pre-November 2025 sessions, producing the same output (`voltages.csv` + `metadata.json`) as the existing `.log` parser. This enables unified batch processing of all ~70 experiment sessions regardless of source format.
+Extend `scripts/analysis/03_extract_session_data.py` to also parse the older `keysight_edu_comms.csv` format used by 22 pre-November 2025 sessions, producing the same output (`voltages.csv` + `metadata.json`) as the existing `.log` parser. This enables unified batch processing of all ~70 experiment sessions regardless of source format.
 
 ## Problem Statement
 
@@ -112,7 +112,7 @@ Extend the existing `extract_log_data.py` with a new `parse_csv_session()` funct
   - Parse `YYYY-MM-DD_TXX.txt` key-value pairs → `{participant_id, sex, randomization_number}`
 
 **Files Modified:**
-- `scripts/extract_log_data.py` — Add ~130 lines (new functions + constants)
+- `scripts/analysis/03_extract_session_data.py` — Add ~130 lines (new functions + constants)
 
 **Dependencies:** None
 
@@ -137,7 +137,7 @@ Extend the existing `extract_log_data.py` with a new `parse_csv_session()` funct
   - Update "no files found" error message for both formats
 
 **Files Modified:**
-- `scripts/extract_log_data.py` — Modify ~30 lines in existing functions
+- `scripts/analysis/03_extract_session_data.py` — Modify ~30 lines in existing functions
 
 **Dependencies:** Phase 1
 
@@ -159,12 +159,12 @@ Extend the existing `extract_log_data.py` with a new `parse_csv_session()` funct
 ## Testing Plan
 
 ### Manual Verification
-- [ ] Run on single CSV session: `python scripts/extract_log_data.py backlogs_local_data/TILA_DATA_VALID/2025-06-19_T27/`
+- [ ] Run on single CSV session: `python scripts/analysis/03_extract_session_data.py backlogs_local_data/TILA_DATA_VALID/2025-06-19_T27/`
   - `voltages.csv`: 5 columns, ~14,000+ rows, voltages at 4dp precision
   - `metadata.json`: frequencies A1=7000, A2=7130, B1=9000, B2=9130; serials CN64050087, CN62490141; target voltages [4.9, 4.6, 5.0, 4.8] from gui file
-- [ ] Run on existing log session (regression test): `python scripts/extract_log_data.py backlogs_local_data/TILA_DATA_VALID/2026-01-26_T122/`
+- [ ] Run on existing log session (regression test): `python scripts/analysis/03_extract_session_data.py backlogs_local_data/TILA_DATA_VALID/2026-01-26_T122/`
   - Output identical to before changes
-- [ ] Run batch mode: `python scripts/extract_log_data.py`
+- [ ] Run batch mode: `python scripts/analysis/03_extract_session_data.py`
   - Processes all ~70 sessions (both formats) without errors
   - Summary shows both log and CSV sessions processed
 - [ ] Spot-check: compare peak voltages in CSV-derived `voltages.csv` against gui_status_messages "Ramp finished" values
@@ -180,7 +180,7 @@ Extend the existing `extract_log_data.py` with a new `parse_csv_session()` funct
 
 ## Rollback Plan
 
-1. All changes are in a single file (`scripts/extract_log_data.py`) on the existing feature branch
+1. All changes are in a single file (`scripts/analysis/03_extract_session_data.py`) on the existing feature branch
 2. The CSV parsing is additive — removing the new functions and reverting `collect_sessions()` back to `collect_log_files()` restores original behavior
 3. No database, config, or external state changes
 
@@ -202,4 +202,4 @@ Extend the existing `extract_log_data.py` with a new `parse_csv_session()` funct
 - Parent plan: `docs/development/plans/active/log-data-extractor.md`
 - Reference CSV session: `backlogs_local_data/TILA_DATA_VALID/2025-06-19_T27/`
 - SCPI command reference: `src/temporal_interference/hardware/keysight_edu33212A.py`
-- Style reference: `scripts/split_log.py`, `scripts/copy_valid_tila_data.py`
+- Style reference: `scripts/analysis/02_split_log_by_day.py`, `scripts/analysis/01_copy_valid_sessions.py`
