@@ -4,7 +4,7 @@ Task contract
 -------------
 ``run_sex_based_voltage_analysis(interval_summary_csv, excel_path,
 condition_report_csv, preprocess_dir, output_dir)`` is a pure processor:
-receives fully resolved input and output paths, writes 7 CSVs and 6 PNGs to
+receives fully resolved input and output paths, writes 6 CSVs and 4 PNGs to
 *output_dir*, and returns ``None``.  The workflow owns idempotency and path
 construction.
 
@@ -23,11 +23,10 @@ Inputs (resolved from default locations when not passed via *input_items*)
 
 Outputs
 -------
-CSVs (7): session_metadata, interval_summary_with_sex, participant_descriptive_stats,
-          channel_asymmetry, voltage_change_counts, sliding_window_sensitivity,
-          statistical_tests_summary
-PNGs (6): descriptive_boxplots, change_counts, stability_comparison,
-          asymmetry_comparison, time_to_stable, condition_sex_interaction
+CSVs (6): session_metadata, interval_summary_with_sex, participant_descriptive_stats,
+          channel_asymmetry, voltage_change_counts, statistical_tests_summary
+PNGs (4): descriptive_boxplots, change_counts, asymmetry_comparison,
+          condition_sex_interaction
 """
 
 import argparse
@@ -78,7 +77,6 @@ _DEFAULT_INTERVAL_SUMMARY_PATH = (
 _DEFAULT_PREPROCESS_DIR = _BACKLOGS / "TILA_DATA_1_processed"
 
 _PARTICIPANT_ID_PATTERN = re.compile(r"_(T?\d+)$")
-SENSITIVITY_WINDOWS = [1, 1.5, 2, 3, 5]
 THRESHOLD = 0.5
 CHANNELS = ["A1", "A2", "B1", "B2"]
 
@@ -89,15 +87,12 @@ CSV_OUTPUT_NAMES = [
     "participant_descriptive_stats.csv",
     "channel_asymmetry.csv",
     "voltage_change_counts.csv",
-    "sliding_window_sensitivity.csv",
     "statistical_tests_summary.csv",
 ]
 PNG_OUTPUT_NAMES = [
     "descriptive_boxplots.png",
     "change_counts.png",
-    "stability_comparison.png",
     "asymmetry_comparison.png",
-    "time_to_stable.png",
     "condition_sex_interaction.png",
 ]
 
@@ -326,163 +321,76 @@ def compute_channel_asymmetry(interval_df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def detect_voltage_targets(
+def count_plateau_changes(
     df: pd.DataFrame,
     start: pd.Timestamp,
     end: pd.Timestamp,
     channel: str,
-) -> list:
-    """Detect settled voltage targets for one channel within a stimulation block."""
+    min_plateau_seconds: int = 120,
+    voltage_tolerance: float = 0.05,
+) -> int:
+    """Count voltage changes (ramp → new plateau) in one channel/block.
+
+    A plateau is a contiguous segment where the voltage is constant within
+    *voltage_tolerance* and lasts at least *min_plateau_seconds*.  Each
+    transition between two consecutive valid plateaus with different voltages
+    counts as one change.  Returns 0 when fewer than two valid plateaus exist.
+    """
     if channel not in df.columns:
-        return []
+        return 0
 
     if not isinstance(df.index, pd.DatetimeIndex):
         if "timestamp" in df.columns:
             df = df.set_index("timestamp")
         else:
-            return []
+            return 0
 
-    df = df[~df.index.duplicated(keep="last")]
+    df = df[~df.index.duplicated(keep="first")]
     block = df.loc[start:end, [channel]].dropna()
     if block.empty:
-        return []
+        return 0
 
-    targets = []
-    timestamps = block.index
-    gaps = pd.Series(
-        (timestamps[1:] - timestamps[:-1]).total_seconds().values,
-        index=timestamps[1:],
+    resampled = block.resample("1s").ffill().dropna()
+    if resampled.empty:
+        return 0
+
+    values = resampled[channel]
+    rounded = (values / voltage_tolerance).round() * voltage_tolerance
+    segment_ids = (rounded != rounded.shift()).cumsum()
+
+    valid_plateaus = []
+    for seg_id, seg in resampled.groupby(segment_ids):
+        if len(seg) >= min_plateau_seconds:
+            seg_rounded = (seg[channel] / voltage_tolerance).round() * voltage_tolerance
+            valid_plateaus.append(float(seg_rounded.iloc[0]))
+
+    if len(valid_plateaus) < 2:
+        return 0
+
+    n_changes = sum(
+        1 for a, b in zip(valid_plateaus, valid_plateaus[1:]) if a != b
     )
-
-    stable_end_mask = gaps > 2.0
-    for ts, is_stable_end in stable_end_mask.items():
-        if is_stable_end:
-            voltage = float(block.at[ts, channel])
-            targets.append((ts, voltage))
-
-    last_ts = timestamps[-1]
-    last_voltage = float(block.iloc[-1][channel])
-    if not targets or targets[-1][0] != last_ts:
-        targets.append((last_ts, last_voltage))
-
-    return targets
-
-
-def count_changes_sliding_window(targets: list, window_minutes: float) -> int:
-    """Count distinct voltage change events using a sliding-window approach."""
-    if not targets:
-        return 1
-
-    sorted_targets = sorted(targets, key=lambda t: t[0])
-    window_td = pd.Timedelta(minutes=window_minutes)
-
-    n_changes = 0
-    prior_voltage = None
-    i = 0
-
-    while i < len(sorted_targets):
-        ts, voltage = sorted_targets[i]
-
-        if prior_voltage is None:
-            n_changes += 1
-        else:
-            if voltage != prior_voltage:
-                n_changes += 1
-
-        prior_voltage = voltage
-        window_end = ts + window_td
-        i += 1
-        while i < len(sorted_targets) and sorted_targets[i][0] <= window_end:
-            i += 1
-
-    return max(n_changes, 1)
-
-
-def compute_stability_metrics(
-    df: pd.DataFrame,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-) -> dict:
-    """Compute per-channel voltage stability metrics for a stimulation block."""
-    if not isinstance(df.index, pd.DatetimeIndex):
-        if "timestamp" in df.columns:
-            df = df.set_index("timestamp")
-        else:
-            return {ch: {"variance": float("nan"), "cv": float("nan"), "range": float("nan")} for ch in CHANNELS}
-
-    df = df[~df.index.duplicated(keep="last")]
-    result = {}
-
-    for channel in CHANNELS:
-        nan_result = {"variance": float("nan"), "cv": float("nan"), "range": float("nan")}
-
-        if channel not in df.columns:
-            result[channel] = nan_result
-            continue
-
-        block = df.loc[start:end, [channel]]
-        if block.empty:
-            result[channel] = nan_result
-            continue
-
-        resampled = block.resample("1s").ffill()
-        active = resampled[resampled[channel] > THRESHOLD][channel].dropna()
-
-        if active.empty:
-            result[channel] = nan_result
-            continue
-
-        variance = float(active.var(ddof=1)) if len(active) > 1 else float("nan")
-        mean_val = float(active.mean())
-        std_val = float(active.std(ddof=1)) if len(active) > 1 else float("nan")
-        cv = (std_val / mean_val) if (mean_val != 0 and not pd.isna(std_val)) else float("nan")
-        range_v = float(active.max() - active.min())
-
-        result[channel] = {"variance": variance, "cv": cv, "range": range_v}
-
-    return result
-
-
-def compute_time_to_first_stable(
-    df: pd.DataFrame,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-    channel: str,
-) -> float:
-    """Compute seconds from block start to the first stable voltage plateau."""
-    if channel not in df.columns:
-        return float("nan")
-
-    if not isinstance(df.index, pd.DatetimeIndex):
-        if "timestamp" in df.columns:
-            df = df.set_index("timestamp")
-        else:
-            return float("nan")
-
-    df = df[~df.index.duplicated(keep="last")]
-    block = df.loc[start:end, [channel]].dropna()
-
-    if len(block) < 2:
-        return float("nan")
-
-    timestamps = block.index
-    for i in range(len(timestamps) - 1):
-        gap_seconds = (timestamps[i + 1] - timestamps[i]).total_seconds()
-        if gap_seconds > 10.0:
-            return (timestamps[i] - start).total_seconds()
-
-    return float("nan")
+    return n_changes
 
 
 def analyse_voltage_changes(
     metadata_df: pd.DataFrame,
     preprocess_dir: pathlib.Path,
-) -> tuple:
-    """Batch voltage change analysis across all sessions."""
-    _DEFAULT_WINDOW = 2
-    changes_rows = []
-    sensitivity_rows = []
-    stability_rows = []
+) -> pd.DataFrame:
+    """Count plateau-based voltage changes, aggregated per participant.
+
+    For each session, calls ``count_plateau_changes`` on every channel/block
+    pair and sums the results into a single ``n_voltage_changes`` value per
+    participant.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per participant with columns:
+        ``participant_id``, ``session``, ``condition``, ``sex``,
+        ``n_voltage_changes``.
+    """
+    rows = []
 
     for _, meta_row in metadata_df.iterrows():
         session = meta_row["session"]
@@ -514,61 +422,22 @@ def analyse_voltage_changes(
         if status == "skipped" or not labelled:
             continue
 
-        for start, end, block_label in labelled:
-            block_stability = compute_stability_metrics(df, start, end)
-
+        total_changes = 0
+        for start, end, _block_label in labelled:
             for channel in CHANNELS:
-                targets = detect_voltage_targets(df, start, end, channel)
+                total_changes += count_plateau_changes(df, start, end, channel)
 
-                n_default = count_changes_sliding_window(targets, _DEFAULT_WINDOW)
-                changes_rows.append(
-                    {
-                        "session": session,
-                        "participant_id": participant_id,
-                        "condition": condition,
-                        "sex": sex,
-                        "block": block_label,
-                        "channel": channel,
-                        "n_change_events": n_default,
-                    }
-                )
+        rows.append(
+            {
+                "participant_id": participant_id,
+                "session": session,
+                "condition": condition,
+                "sex": sex,
+                "n_voltage_changes": total_changes,
+            }
+        )
 
-                for window in SENSITIVITY_WINDOWS:
-                    n_win = count_changes_sliding_window(targets, window)
-                    sensitivity_rows.append(
-                        {
-                            "session": session,
-                            "participant_id": participant_id,
-                            "condition": condition,
-                            "sex": sex,
-                            "block": block_label,
-                            "channel": channel,
-                            "window_minutes": window,
-                            "n_change_events": n_win,
-                        }
-                    )
-
-                ch_stability = block_stability.get(
-                    channel,
-                    {"variance": float("nan"), "cv": float("nan"), "range": float("nan")},
-                )
-                ttfs = compute_time_to_first_stable(df, start, end, channel)
-                stability_rows.append(
-                    {
-                        "session": session,
-                        "participant_id": participant_id,
-                        "condition": condition,
-                        "sex": sex,
-                        "block": block_label,
-                        "channel": channel,
-                        "variance": ch_stability["variance"],
-                        "cv": ch_stability["cv"],
-                        "range_v": ch_stability["range"],
-                        "time_to_first_stable": ttfs,
-                    }
-                )
-
-    return pd.DataFrame(changes_rows), pd.DataFrame(sensitivity_rows), pd.DataFrame(stability_rows)
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -638,7 +507,6 @@ def run_all_statistical_tests(
     desc_df: pd.DataFrame,
     asymmetry_df: pd.DataFrame,
     changes_df: pd.DataFrame,
-    stability_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """Run all sex-group comparisons and apply Benjamini-Hochberg FDR correction."""
     _CONDITION_FILTERS = [("all", None), ("active", "active"), ("sham", "sham")]
@@ -653,9 +521,6 @@ def run_all_statistical_tests(
 
     per_channel_specs = [
         (desc_df, "mean_voltage"),
-        (changes_df, "n_change_events"),
-        (stability_df, "variance"),
-        (stability_df, "time_to_first_stable"),
     ]
 
     for source_df, metric in per_channel_specs:
@@ -679,7 +544,11 @@ def run_all_statistical_tests(
                     }
                 )
 
-    overall_specs = [(asymmetry_df, "abs_diff_A"), (asymmetry_df, "abs_diff_B")]
+    overall_specs = [
+        (asymmetry_df, "abs_diff_A"),
+        (asymmetry_df, "abs_diff_B"),
+        (changes_df, "n_voltage_changes"),
+    ]
     for source_df, metric in overall_specs:
         if source_df.empty or metric not in source_df.columns:
             continue
@@ -817,10 +686,16 @@ def plot_descriptive_boxplots(
         ax.set_xticks([1, 2])
         ax.set_xticklabels(["Male", "Female"])
         ax.set_title(f"Channel {channel}")
-        ax.set_ylabel("Mean Voltage (V)")
+        ax.set_ylabel("Participant Mean Voltage (V)")
         ax.set_xlim(0.5, 2.5)
 
-    fig.suptitle("Per-Channel Mean Voltage: Male vs Female", fontsize=13, fontweight="bold")
+    all_ylims = [ax.get_ylim() for ax in axes]
+    global_ymin = min(lo for lo, _ in all_ylims)
+    global_ymax = max(hi for _, hi in all_ylims)
+    for ax in axes:
+        ax.set_ylim(global_ymin, global_ymax)
+
+    fig.suptitle("Distribution of Per-Participant Mean Voltage by Sex", fontsize=13, fontweight="bold")
     plt.tight_layout()
     out_path = output_dir / "descriptive_boxplots.png"
     fig.savefig(out_path, dpi=100, bbox_inches="tight")
@@ -832,99 +707,73 @@ def plot_descriptive_boxplots(
 def plot_change_counts(
     changes_df: pd.DataFrame, stats_df: pd.DataFrame, output_dir: pathlib.Path
 ) -> pathlib.Path:
-    blocks = ["block_1", "block_2"]
-    block_labels = ["Block 1", "Block 2"]
-    channels = ["A1", "A2", "B1", "B2"]
+    conditions = ["active", "sham"]
+    condition_labels = ["Active", "Sham"]
     male_color = "#4C72B0"
     female_color = "#DD8452"
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
-    for ax_idx, (block, blabel) in enumerate(zip(blocks, block_labels)):
+    rng = np.random.default_rng(42)
+    for ax_idx, (cond, clabel) in enumerate(zip(conditions, condition_labels)):
         ax = axes[ax_idx]
-        x_positions = np.arange(len(channels))
-        bar_width = 0.35
+        cond_data = (
+            changes_df[changes_df["condition"].str.lower() == cond]
+            if not changes_df.empty and "condition" in changes_df.columns
+            else pd.DataFrame()
+        )
 
-        block_data = changes_df[changes_df["block"] == block] if not changes_df.empty else pd.DataFrame()
-        male_means, male_sems, female_means, female_sems = [], [], [], []
+        male_vals = (
+            cond_data.loc[cond_data["sex"] == "male", "n_voltage_changes"].dropna().values
+            if not cond_data.empty else np.array([])
+        )
+        female_vals = (
+            cond_data.loc[cond_data["sex"] == "female", "n_voltage_changes"].dropna().values
+            if not cond_data.empty else np.array([])
+        )
 
-        for ch in channels:
-            ch_data = block_data[block_data["channel"] == ch] if not block_data.empty else pd.DataFrame()
-            m_vals = ch_data.loc[ch_data["sex"] == "male", "n_change_events"].dropna() if not ch_data.empty else pd.Series(dtype=float)
-            f_vals = ch_data.loc[ch_data["sex"] == "female", "n_change_events"].dropna() if not ch_data.empty else pd.Series(dtype=float)
-            male_means.append(m_vals.mean() if len(m_vals) > 0 else 0)
-            male_sems.append(m_vals.sem() if len(m_vals) > 1 else 0)
-            female_means.append(f_vals.mean() if len(f_vals) > 0 else 0)
-            female_sems.append(f_vals.sem() if len(f_vals) > 1 else 0)
+        bp = ax.boxplot(
+            [male_vals, female_vals], positions=[1, 2], widths=0.5, patch_artist=True,
+            medianprops={"color": "black", "linewidth": 1.5},
+            whiskerprops={"linewidth": 1}, capprops={"linewidth": 1},
+            flierprops={"marker": ""},
+        )
+        bp["boxes"][0].set_facecolor(male_color)
+        bp["boxes"][0].set_alpha(0.7)
+        if len(bp["boxes"]) > 1:
+            bp["boxes"][1].set_facecolor(female_color)
+            bp["boxes"][1].set_alpha(0.7)
 
-        ax.bar(x_positions - bar_width / 2, male_means, bar_width, yerr=male_sems, capsize=4, label="Male", color=male_color, alpha=0.8, error_kw={"linewidth": 1})
-        ax.bar(x_positions + bar_width / 2, female_means, bar_width, yerr=female_sems, capsize=4, label="Female", color=female_color, alpha=0.8, error_kw={"linewidth": 1})
+        for pos, vals, color in [(1, male_vals, male_color), (2, female_vals, female_color)]:
+            if len(vals) > 0:
+                jitter = rng.uniform(-0.12, 0.12, size=len(vals))
+                ax.scatter(pos + jitter, vals, color=color, alpha=0.7, s=20, zorder=4, linewidths=0)
 
-        ax.set_xticks(x_positions)
-        ax.set_xticklabels(channels)
-        ax.set_title(blabel)
-        ax.set_ylabel("Mean N Change Events")
-        ax.legend(fontsize=8)
+        p = _lookup_pvalue(stats_df, "n_voltage_changes", "all", cond)
+        if not (p != p) and len(male_vals) > 0 and len(female_vals) > 0:
+            all_vals = np.concatenate([male_vals, female_vals])
+            y_top = float(np.nanmax(all_vals)) if len(all_vals) > 0 else 1.0
+            y_ann = y_top * 1.05 if y_top > 0 else 0.5
+            _annotate_pvalue(ax, p, 1, 2, y_ann)
 
-    fig.suptitle("Voltage Change Event Counts: Male vs Female", fontsize=13, fontweight="bold")
+        ax.set_xticks([1, 2])
+        ax.set_xticklabels(["Male", "Female"])
+        ax.set_title(clabel)
+        ax.set_ylabel("N Voltage Changes")
+        ax.set_xlim(0.5, 2.5)
+
+    all_ylims = [ax.get_ylim() for ax in axes]
+    global_ymin = min(lo for lo, _ in all_ylims)
+    global_ymax = max(hi for _, hi in all_ylims)
+    for ax in axes:
+        ax.set_ylim(global_ymin, global_ymax)
+
+    fig.suptitle("Plateau-Based Voltage Changes: Male vs Female", fontsize=13, fontweight="bold")
     plt.tight_layout()
     out_path = output_dir / "change_counts.png"
     fig.savefig(out_path, dpi=100, bbox_inches="tight")
     plt.close(fig)
     logging.info("  saved change_counts.png")
-    return out_path
-
-
-def plot_stability_comparison(
-    stability_df: pd.DataFrame, output_dir: pathlib.Path
-) -> pathlib.Path:
-    blocks = ["block_1", "block_2"]
-    block_labels = ["Block 1", "Block 2"]
-    metrics = ["variance", "cv"]
-    metric_labels = ["Variance (V²)", "CV (std/mean)"]
-    male_color = "#4C72B0"
-    female_color = "#DD8452"
-
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-
-    for row_idx, (block, blabel) in enumerate(zip(blocks, block_labels)):
-        for col_idx, (metric, mlabel) in enumerate(zip(metrics, metric_labels)):
-            ax = axes[row_idx][col_idx]
-            block_data = stability_df[stability_df["block"] == block] if not stability_df.empty else pd.DataFrame()
-
-            male_vals = block_data.loc[block_data["sex"] == "male", metric].dropna().values if not block_data.empty else np.array([])
-            female_vals = block_data.loc[block_data["sex"] == "female", metric].dropna().values if not block_data.empty else np.array([])
-
-            bp = ax.boxplot(
-                [male_vals, female_vals], positions=[1, 2], widths=0.4, patch_artist=True,
-                medianprops={"color": "black", "linewidth": 1.5},
-                whiskerprops={"linewidth": 1}, capprops={"linewidth": 1},
-                flierprops={"marker": ""},
-            )
-            bp["boxes"][0].set_facecolor(male_color)
-            bp["boxes"][0].set_alpha(0.3)
-            if len(bp["boxes"]) > 1:
-                bp["boxes"][1].set_facecolor(female_color)
-                bp["boxes"][1].set_alpha(0.3)
-
-            rng = np.random.default_rng(42)
-            for pos, vals, color in [(1, male_vals, male_color), (2, female_vals, female_color)]:
-                if len(vals) > 0:
-                    jitter = rng.uniform(-0.12, 0.12, size=len(vals))
-                    ax.scatter(pos + jitter, vals, color=color, alpha=0.6, s=18, zorder=3, linewidths=0)
-
-            ax.set_xticks([1, 2])
-            ax.set_xticklabels(["Male", "Female"])
-            ax.set_title(f"{blabel} — {mlabel}")
-            ax.set_ylabel(mlabel)
-            ax.set_xlim(0.5, 2.5)
-
-    fig.suptitle("Voltage Stability Metrics: Male vs Female", fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    out_path = output_dir / "stability_comparison.png"
-    fig.savefig(out_path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    logging.info("  saved stability_comparison.png")
     return out_path
 
 
@@ -984,6 +833,12 @@ def plot_asymmetry_comparison(
         ax.set_ylabel("Absolute Difference (V)")
         ax.set_xlim(0.5, 2.5)
 
+    all_ylims = [ax.get_ylim() for ax in axes]
+    global_ymin = min(lo for lo, _ in all_ylims)
+    global_ymax = max(hi for _, hi in all_ylims)
+    for ax in axes:
+        ax.set_ylim(global_ymin, global_ymax)
+
     fig.suptitle("Channel-Pair Asymmetry: Male vs Female", fontsize=13, fontweight="bold")
     plt.tight_layout()
     out_path = output_dir / "asymmetry_comparison.png"
@@ -993,62 +848,8 @@ def plot_asymmetry_comparison(
     return out_path
 
 
-def plot_time_to_stable(
-    stability_df: pd.DataFrame, stats_df: pd.DataFrame, output_dir: pathlib.Path
-) -> pathlib.Path:
-    channels = ["A1", "A2", "B1", "B2"]
-    male_color = "#4C72B0"
-    female_color = "#DD8452"
-
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    axes = axes.flatten()
-
-    for idx, channel in enumerate(channels):
-        ax = axes[idx]
-        if stability_df.empty or "time_to_first_stable" not in stability_df.columns:
-            male_vals = np.array([])
-            female_vals = np.array([])
-        else:
-            ch_data = stability_df[stability_df["channel"] == channel]
-            male_vals = ch_data.loc[ch_data["sex"] == "male", "time_to_first_stable"].dropna().values
-            female_vals = ch_data.loc[ch_data["sex"] == "female", "time_to_first_stable"].dropna().values
-
-        bp = ax.boxplot(
-            [male_vals, female_vals], positions=[1, 2], widths=0.5, patch_artist=True,
-            medianprops={"color": "black", "linewidth": 1.5},
-            whiskerprops={"linewidth": 1}, capprops={"linewidth": 1},
-            flierprops={"marker": "o", "markersize": 3, "alpha": 0.5},
-        )
-        bp["boxes"][0].set_facecolor(male_color)
-        bp["boxes"][0].set_alpha(0.7)
-        if len(bp["boxes"]) > 1:
-            bp["boxes"][1].set_facecolor(female_color)
-            bp["boxes"][1].set_alpha(0.7)
-
-        p = _lookup_pvalue(stats_df, "time_to_first_stable", channel, "all")
-        if not (p != p):
-            all_vals = np.concatenate([male_vals, female_vals]) if len(male_vals) + len(female_vals) > 0 else np.array([0])
-            y_top = float(np.nanmax(all_vals)) if len(all_vals) > 0 else 1.0
-            y_ann = y_top * 1.05 if y_top > 0 else 5.0
-            _annotate_pvalue(ax, p, 1, 2, y_ann)
-
-        ax.set_xticks([1, 2])
-        ax.set_xticklabels(["Male", "Female"])
-        ax.set_title(f"Channel {channel}")
-        ax.set_ylabel("Time to First Stable (s)")
-        ax.set_xlim(0.5, 2.5)
-
-    fig.suptitle("Time to First Stable Voltage: Male vs Female", fontsize=13, fontweight="bold")
-    plt.tight_layout()
-    out_path = output_dir / "time_to_stable.png"
-    fig.savefig(out_path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    logging.info("  saved time_to_stable.png")
-    return out_path
-
-
 def plot_condition_sex_interaction(
-    desc_df: pd.DataFrame, output_dir: pathlib.Path
+    desc_df: pd.DataFrame, stats_df: pd.DataFrame, output_dir: pathlib.Path
 ) -> pathlib.Path:
     channels = ["A1", "A2", "B1", "B2"]
     conditions = ["active", "sham"]
@@ -1095,12 +896,24 @@ def plot_condition_sex_interaction(
                 ax.plot(xs, ys, marker="o", color=color, label=cond.capitalize(), linewidth=1.5, markersize=6)
                 ax.errorbar(xs, ys, yerr=errs, fmt="none", color=color, capsize=4, linewidth=1)
 
+        p = _lookup_pvalue(stats_df, "mean_voltage", channel, "all")
+        if not (p != p):
+            y_top = ax.get_ylim()[1]
+            y_ann = y_top * 0.95
+            _annotate_pvalue(ax, p, 0, 1, y_ann)
+
         ax.set_xticks([0, 1])
         ax.set_xticklabels(["Male", "Female"])
         ax.set_title(f"Channel {channel}")
         ax.set_ylabel("Mean Voltage (V)")
         ax.legend(fontsize=8)
         ax.set_xlim(-0.5, 1.5)
+
+    all_ylims = [ax.get_ylim() for ax in axes]
+    global_ymin = min(lo for lo, _ in all_ylims)
+    global_ymax = max(hi for _, hi in all_ylims)
+    for ax in axes:
+        ax.set_ylim(global_ymin, global_ymax)
 
     fig.suptitle("Condition × Sex Interaction: Mean Voltage", fontsize=13, fontweight="bold")
     plt.tight_layout()
@@ -1139,7 +952,7 @@ def run_sex_based_voltage_analysis(
     preprocess_dir:
         Directory containing per-session subdirectories with voltage CSVs.
     output_dir:
-        Directory where all 7 CSV and 6 PNG outputs are written.
+        Directory where all 6 CSV and 4 PNG outputs are written.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1147,54 +960,48 @@ def run_sex_based_voltage_analysis(
     logging.info("Sex-Based Voltage Analysis")
     logging.info("=" * 60)
 
-    logging.info("[1/9] Loading sex mapping from Excel...")
+    logging.info("[1/7] Loading sex mapping from Excel...")
     sex_map = load_sex_mapping(excel_path)
     logging.info("  %d participant sex entries loaded", len(sex_map))
 
-    logging.info("[2/9] Loading session metadata...")
+    logging.info("[2/7] Loading session metadata...")
     metadata_df = load_session_metadata(condition_report_csv, sex_map)
     logging.info("  %d sessions in condition report", len(metadata_df))
 
-    logging.info("[3/9] Loading interval summary...")
+    logging.info("[3/7] Loading interval summary...")
     interval_df = load_interval_summary(interval_summary_csv, metadata_df)
 
-    logging.info("[4/9] Computing descriptive stats and channel asymmetry...")
+    logging.info("[4/7] Computing descriptive stats and channel asymmetry...")
     desc_df = compute_descriptive_stats(interval_df)
     asymmetry_df = compute_channel_asymmetry(interval_df)
     logging.info("  descriptive stats: %d rows", len(desc_df))
     logging.info("  asymmetry: %d rows", len(asymmetry_df))
 
-    logging.info("[5/9] Analysing raw voltage CSVs (changes, stability)...")
+    logging.info("[5/7] Analysing raw voltage CSVs (plateau-based changes)...")
     metadata_with_sex = metadata_df[metadata_df["sex"].notna()].copy()
     logging.info("  processing %d sessions with known sex", len(metadata_with_sex))
-    changes_df, sensitivity_df, stability_df = analyse_voltage_changes(metadata_with_sex, preprocess_dir)
-    logging.info("  changes: %d rows", len(changes_df))
-    logging.info("  sensitivity: %d rows", len(sensitivity_df))
-    logging.info("  stability: %d rows", len(stability_df))
+    changes_df = analyse_voltage_changes(metadata_with_sex, preprocess_dir)
+    logging.info("  voltage changes: %d participants", len(changes_df))
 
-    logging.info("[6/9] Running statistical tests...")
-    stats_df = run_all_statistical_tests(desc_df, asymmetry_df, changes_df, stability_df)
+    logging.info("[6/7] Running statistical tests...")
+    stats_df = run_all_statistical_tests(desc_df, asymmetry_df, changes_df)
     logging.info("  %d tests run", len(stats_df))
     if not stats_df.empty and "p_adjusted" in stats_df.columns:
         n_sig = (stats_df["p_adjusted"] < 0.05).sum()
         logging.info("  %d tests significant at FDR q < 0.05", n_sig)
 
-    logging.info("[7/9] Generating figures...")
+    logging.info("[7/7] Generating figures and saving CSV outputs...")
     plot_descriptive_boxplots(desc_df, stats_df, output_dir)
     plot_change_counts(changes_df, stats_df, output_dir)
-    plot_stability_comparison(stability_df, output_dir)
     plot_asymmetry_comparison(asymmetry_df, stats_df, output_dir)
-    plot_time_to_stable(stability_df, stats_df, output_dir)
-    plot_condition_sex_interaction(desc_df, output_dir)
+    plot_condition_sex_interaction(desc_df, stats_df, output_dir)
 
-    logging.info("[8/9] Saving CSV outputs...")
     csv_map = {
         "session_metadata.csv": metadata_df,
         "interval_summary_with_sex.csv": interval_df,
         "participant_descriptive_stats.csv": desc_df,
         "channel_asymmetry.csv": asymmetry_df,
         "voltage_change_counts.csv": changes_df,
-        "sliding_window_sensitivity.csv": sensitivity_df,
         "statistical_tests_summary.csv": stats_df,
     }
     for filename, df in csv_map.items():
@@ -1202,7 +1009,7 @@ def run_sex_based_voltage_analysis(
         df.to_csv(out_path, index=False)
         logging.info("  saved %s", filename)
 
-    logging.info("[9/9] Summary")
+    logging.info("Summary")
     total_sessions = len(metadata_df)
     n_male = int((metadata_df["sex"] == "male").sum())
     n_female = int((metadata_df["sex"] == "female").sum())
