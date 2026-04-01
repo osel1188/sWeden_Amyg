@@ -130,6 +130,14 @@ def resample_session(df: pd.DataFrame, fs: float) -> pd.DataFrame:
         .reset_index()
     )
 
+    elapsed_ms = (
+        (resampled["timestamp"] - resampled["timestamp"].iloc[0])
+        .dt.total_seconds()
+        .mul(1000)
+        .round(3)
+    )
+    resampled.insert(0, "time_ms", elapsed_ms)
+
     return resampled
 
 
@@ -237,11 +245,7 @@ def run_resample_voltages(
         if monitor:
             _plot_resampled(session_name, resampled_df, CHANNELS)
 
-        # Prepend sampling rate comment to existing comments
-        rate_comment = f"# sampling_rate_hz: {fs}\n"
-        out_comments = [rate_comment] + comments
-
-        writer.write(resampled_df, out_comments, out_path)
+        writer.write(resampled_df, [], out_path)
         log.info("Saved: %s (%d rows)", out_path, len(resampled_df))
 
         results.append(out_path)
