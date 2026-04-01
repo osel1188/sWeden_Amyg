@@ -2,11 +2,11 @@
 
 Task contract
 -------------
-``run_sex_based_voltage_analysis(input_items, output_dir, force)`` follows the
-DAG task contract.  *input_items* should be the output paths from the
-``analyse_stim_intervals`` task (i.e. the ``interval_summary.csv`` path) plus
-any additional data files needed (Excel participant list, condition report).
-The function writes 7 CSVs and 6 PNGs to *output_dir* and returns all 13 paths.
+``run_sex_based_voltage_analysis(interval_summary_csv, excel_path,
+condition_report_csv, preprocess_dir, output_dir)`` is a pure processor:
+receives fully resolved input and output paths, writes 7 CSVs and 6 PNGs to
+*output_dir*, and returns ``None``.  The workflow owns idempotency and path
+construction.
 
 Standalone use
 --------------
@@ -37,7 +37,6 @@ import pathlib
 import re
 import sys
 import warnings
-from typing import List
 
 import matplotlib
 matplotlib.use("Agg")
@@ -47,13 +46,12 @@ import pandas as pd
 
 # Import block-detection helpers from the workflow task module directly
 # (replaces the importlib/sys.path gymnastics used in 07_)
-from scripts.analysis.analyse_stim_intervals import (
+from analysis.analyse_stim_intervals import (
     load_session,
     detect_active_intervals,
     classify_intervals,
 )
 
-from utils.should_process_task import should_process_task, clean_task_outputs
 
 # Optional scipy import
 try:
@@ -85,7 +83,7 @@ THRESHOLD = 0.5
 CHANNELS = ["A1", "A2", "B1", "B2"]
 
 # Output file names (relative to output_dir)
-_CSV_NAMES = [
+CSV_OUTPUT_NAMES = [
     "session_metadata.csv",
     "interval_summary_with_sex.csv",
     "participant_descriptive_stats.csv",
@@ -94,7 +92,7 @@ _CSV_NAMES = [
     "sliding_window_sensitivity.csv",
     "statistical_tests_summary.csv",
 ]
-_PNG_NAMES = [
+PNG_OUTPUT_NAMES = [
     "descriptive_boxplots.png",
     "change_counts.png",
     "stability_comparison.png",
@@ -1119,111 +1117,69 @@ def plot_condition_sex_interaction(
 
 
 def run_sex_based_voltage_analysis(
-    input_items: List[pathlib.Path],
+    interval_summary_csv: pathlib.Path,
+    excel_path: pathlib.Path,
+    condition_report_csv: pathlib.Path,
+    preprocess_dir: pathlib.Path,
     output_dir: pathlib.Path,
-    force: bool = False,
-) -> List[pathlib.Path]:
+) -> None:
     """Run the full sex-based voltage analysis pipeline.
+
+    Pure processor: receives fully resolved paths, returns ``None``.
+    The workflow owns idempotency and path construction.
 
     Parameters
     ----------
-    input_items:
-        Paths to input data files.  The function looks for these specific
-        file names among *input_items* (matched by ``name``):
-
-        - ``interval_summary.csv``    — from ``run_analyse_stim_intervals``
-        - ``Excel_for_stimulators.xlsx`` — participant sex mapping
-        - ``condition_validation_report.csv`` — session-to-condition map
-
-        Any item that is a *directory* is treated as the preprocessed data
-        directory (``TILA_DATA_1_processed``).  Unrecognised items are ignored.
-
-        Missing files fall back to their default locations under
-        ``backlogs_local_data/``.
-
+    interval_summary_csv:
+        Path to ``interval_summary.csv`` from ``analyse_stim_intervals``.
+    excel_path:
+        Path to ``Excel_for_stimulators.xlsx`` (participant sex mapping).
+    condition_report_csv:
+        Path to ``condition_validation_report.csv``.
+    preprocess_dir:
+        Directory containing per-session subdirectories with voltage CSVs.
     output_dir:
         Directory where all 7 CSV and 6 PNG outputs are written.
-    force:
-        When ``True``, rerun even if all outputs are already up-to-date.
-
-    Returns
-    -------
-    list of Path
-        Paths to all 13 output files (7 CSVs + 6 PNGs).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    all_outputs = [output_dir / name for name in _CSV_NAMES + _PNG_NAMES]
+    logging.info("=" * 60)
+    logging.info("Sex-Based Voltage Analysis")
+    logging.info("=" * 60)
 
-    # Resolve special input files from input_items or fall back to defaults
-    interval_summary_path = _DEFAULT_INTERVAL_SUMMARY_PATH
-    excel_path = _DEFAULT_EXCEL_PATH
-    condition_report_path = _DEFAULT_CONDITION_REPORT_PATH
-    preprocess_dir = _DEFAULT_PREPROCESS_DIR
-
-    for item in input_items:
-        if item.is_dir():
-            preprocess_dir = item
-        elif item.name == "interval_summary.csv":
-            interval_summary_path = item
-        elif item.name.endswith(".xlsx"):
-            excel_path = item
-        elif item.name == "condition_validation_report.csv":
-            condition_report_path = item
-
-    # Collect input files that exist for idempotency check
-    idempotency_inputs = [p for p in [interval_summary_path, excel_path, condition_report_path] if p.exists()]
-    if not idempotency_inputs:
-        logging.warning("[sex_based_voltage_analysis] No valid input files found for idempotency check.")
-        return []
-
-    if not should_process_task(
-        input_paths=idempotency_inputs,
-        output_paths=all_outputs,
-        force=force,
-    ):
-        return all_outputs
-
-    for p in all_outputs:
-        clean_task_outputs(p)
-
-    print("=" * 60)
-    print("Sex-Based Voltage Analysis")
-    print("=" * 60)
-
-    print("\n[1/9] Loading sex mapping from Excel...")
+    logging.info("[1/9] Loading sex mapping from Excel...")
     sex_map = load_sex_mapping(excel_path)
-    print(f"  {len(sex_map)} participant sex entries loaded")
+    logging.info("  %d participant sex entries loaded", len(sex_map))
 
-    print("\n[2/9] Loading session metadata...")
-    metadata_df = load_session_metadata(condition_report_path, sex_map)
-    print(f"  {len(metadata_df)} sessions in condition report")
+    logging.info("[2/9] Loading session metadata...")
+    metadata_df = load_session_metadata(condition_report_csv, sex_map)
+    logging.info("  %d sessions in condition report", len(metadata_df))
 
-    print("\n[3/9] Loading interval summary...")
-    interval_df = load_interval_summary(interval_summary_path, metadata_df)
+    logging.info("[3/9] Loading interval summary...")
+    interval_df = load_interval_summary(interval_summary_csv, metadata_df)
 
-    print("\n[4/9] Computing descriptive stats and channel asymmetry...")
+    logging.info("[4/9] Computing descriptive stats and channel asymmetry...")
     desc_df = compute_descriptive_stats(interval_df)
     asymmetry_df = compute_channel_asymmetry(interval_df)
-    print(f"  descriptive stats: {len(desc_df)} rows")
-    print(f"  asymmetry: {len(asymmetry_df)} rows")
+    logging.info("  descriptive stats: %d rows", len(desc_df))
+    logging.info("  asymmetry: %d rows", len(asymmetry_df))
 
-    print("\n[5/9] Analysing raw voltage CSVs (changes, stability)...")
+    logging.info("[5/9] Analysing raw voltage CSVs (changes, stability)...")
     metadata_with_sex = metadata_df[metadata_df["sex"].notna()].copy()
-    print(f"  processing {len(metadata_with_sex)} sessions with known sex")
+    logging.info("  processing %d sessions with known sex", len(metadata_with_sex))
     changes_df, sensitivity_df, stability_df = analyse_voltage_changes(metadata_with_sex, preprocess_dir)
-    print(f"  changes: {len(changes_df)} rows")
-    print(f"  sensitivity: {len(sensitivity_df)} rows")
-    print(f"  stability: {len(stability_df)} rows")
+    logging.info("  changes: %d rows", len(changes_df))
+    logging.info("  sensitivity: %d rows", len(sensitivity_df))
+    logging.info("  stability: %d rows", len(stability_df))
 
-    print("\n[6/9] Running statistical tests...")
+    logging.info("[6/9] Running statistical tests...")
     stats_df = run_all_statistical_tests(desc_df, asymmetry_df, changes_df, stability_df)
-    print(f"  {len(stats_df)} tests run")
+    logging.info("  %d tests run", len(stats_df))
     if not stats_df.empty and "p_adjusted" in stats_df.columns:
         n_sig = (stats_df["p_adjusted"] < 0.05).sum()
-        print(f"  {n_sig} tests significant at FDR q < 0.05")
+        logging.info("  %d tests significant at FDR q < 0.05", n_sig)
 
-    print("\n[7/9] Generating figures...")
+    logging.info("[7/9] Generating figures...")
     plot_descriptive_boxplots(desc_df, stats_df, output_dir)
     plot_change_counts(changes_df, stats_df, output_dir)
     plot_stability_comparison(stability_df, output_dir)
@@ -1231,7 +1187,7 @@ def run_sex_based_voltage_analysis(
     plot_time_to_stable(stability_df, stats_df, output_dir)
     plot_condition_sex_interaction(desc_df, output_dir)
 
-    print("\n[8/9] Saving CSV outputs...")
+    logging.info("[8/9] Saving CSV outputs...")
     csv_map = {
         "session_metadata.csv": metadata_df,
         "interval_summary_with_sex.csv": interval_df,
@@ -1244,22 +1200,17 @@ def run_sex_based_voltage_analysis(
     for filename, df in csv_map.items():
         out_path = output_dir / filename
         df.to_csv(out_path, index=False)
-        logging.info(f"  saved {filename}")
+        logging.info("  saved %s", filename)
 
-    print("\n[9/9] Summary")
-    print("-" * 40)
+    logging.info("[9/9] Summary")
     total_sessions = len(metadata_df)
     n_male = int((metadata_df["sex"] == "male").sum())
     n_female = int((metadata_df["sex"] == "female").sum())
     n_excluded = int(metadata_df["sex"].isna().sum())
-    print(f"  Total sessions        : {total_sessions}")
-    print(f"  Male sessions         : {n_male}")
-    print(f"  Female sessions       : {n_female}")
-    print(f"  Excluded (no sex data): {n_excluded}")
-    print("\nDone.")
-    print("=" * 60)
-
-    return all_outputs
+    logging.info("  Total sessions        : %d", total_sessions)
+    logging.info("  Male sessions         : %d", n_male)
+    logging.info("  Female sessions       : %d", n_female)
+    logging.info("  Excluded (no sex data): %d", n_excluded)
 
 
 # ---------------------------------------------------------------------------
@@ -1310,20 +1261,37 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    from utils.should_process_task import should_process_task, clean_task_outputs
+
     parser = _build_arg_parser()
     args = parser.parse_args()
 
-    input_items = [
-        args.interval_summary,
-        args.excel,
-        args.condition_report,
-        args.preprocess_dir,
+    all_outputs = [args.output_dir / name for name in CSV_OUTPUT_NAMES + PNG_OUTPUT_NAMES]
+    idempotency_inputs = [
+        p for p in [args.interval_summary, args.excel, args.condition_report]
+        if p.exists()
     ]
 
-    produced = run_sex_based_voltage_analysis(input_items, args.output_dir, force=args.force)
-    if not produced:
-        print("No outputs produced.", file=sys.stderr)
+    if not idempotency_inputs:
+        print("No valid input files found.", file=sys.stderr)
         sys.exit(1)
+
+    if not should_process_task(
+        input_paths=idempotency_inputs,
+        output_paths=all_outputs,
+        force=args.force,
+    ):
+        print("All outputs up-to-date — skipping.")
+        return
+
+    clean_task_outputs(all_outputs)
+    run_sex_based_voltage_analysis(
+        interval_summary_csv=args.interval_summary,
+        excel_path=args.excel,
+        condition_report_csv=args.condition_report,
+        preprocess_dir=args.preprocess_dir,
+        output_dir=args.output_dir,
+    )
 
 
 if __name__ == "__main__":
