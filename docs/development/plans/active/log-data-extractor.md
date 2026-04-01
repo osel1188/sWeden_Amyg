@@ -9,7 +9,7 @@
 
 ## Overview
 
-A Python script (`scripts/extract_log_data.py`) that parses TILA `.log` files and produces **two files per session** in an output folder: a wide-format voltage timeseries CSV and a JSON metadata file containing session overview, hardware config, frequencies, and protocol parameters. This complements the existing `split_log.py` and `copy_valid_tila_data.py` scripts.
+A Python script (`scripts/analysis/03_extract_session_data.py`) that parses TILA `.log` files and produces **two files per session** in an output folder: a wide-format voltage timeseries CSV and a JSON metadata file containing session overview, hardware config, frequencies, and protocol parameters. This complements the existing `02_split_log_by_day.py` and `01_copy_valid_sessions.py` scripts.
 
 ## Problem Statement
 
@@ -179,7 +179,7 @@ Only the `manager` logger ramp lines are captured (not the `root` logger duplica
 
 ## Implementation Plan
 
-### Phase 1: Create `scripts/extract_log_data.py`
+### Phase 1: Create `scripts/analysis/03_extract_session_data.py`
 **Goal:** Complete working script with all extraction and output logic
 
 **Started:** 2026-03-18
@@ -194,7 +194,7 @@ Only the `manager` logger ramp lines are captured (not the `root` logger duplica
 - [x] Task 1.6 — Timestamp formatting (`,` → `.`), voltage rounding to 1dp
 
 **Files Modified:**
-- `scripts/extract_log_data.py` — **NEW** (~250 lines)
+- `scripts/analysis/03_extract_session_data.py` — **NEW** (~250 lines)
 
 **Dependencies:** None
 
@@ -203,10 +203,10 @@ Only the `manager` logger ramp lines are captured (not the `root` logger duplica
 ## Testing Plan
 
 ### Manual Verification
-- [ ] Run on single file: `python scripts/extract_log_data.py backlogs_local_data/TILA_DATA_VALID/2026-01-26_T122/2026-01-26_AM.log -o /tmp/test/`
+- [ ] Run on single file: `python scripts/analysis/03_extract_session_data.py backlogs_local_data/TILA_DATA_VALID/2026-01-26_T122/2026-01-26_AM.log -o /tmp/test/`
   - `voltages.csv`: 5 columns (timestamp + 4 channels), ~78 rows, voltages rounded cleanly
   - `metadata.json`: protocol=active, A1=7000Hz, A2=7130Hz, B1=9000Hz, B2=9130Hz, SNs present
-- [ ] Run batch: `python scripts/extract_log_data.py`
+- [ ] Run batch: `python scripts/analysis/03_extract_session_data.py`
   - Output folders created for all sessions with log files
   - No errors or crashes
 - [ ] Spot-check: compare 5 random rows from `voltages.csv` against raw log timestamps and voltage values
@@ -221,10 +221,10 @@ Only the `manager` logger ramp lines are captured (not the `root` logger duplica
 ## CLI Interface
 
 ```bash
-python scripts/extract_log_data.py                                         # batch: all TILA_DATA_VALID
-python scripts/extract_log_data.py path/to/file.log                        # single file
-python scripts/extract_log_data.py path/to/session_folder/                 # single session
-python scripts/extract_log_data.py -o custom_output/                       # custom output dir
+python scripts/analysis/03_extract_session_data.py                                         # batch: all TILA_DATA_VALID
+python scripts/analysis/03_extract_session_data.py path/to/file.log                        # single file
+python scripts/analysis/03_extract_session_data.py path/to/session_folder/                 # single session
+python scripts/analysis/03_extract_session_data.py -o custom_output/                       # custom output dir
 ```
 
 - `input` (positional, optional): `.log` file, session folder, or omit for batch. Default: `backlogs_local_data/TILA_DATA_VALID/`
@@ -246,5 +246,5 @@ python scripts/extract_log_data.py -o custom_output/                       # cus
 
 - Source of frequency log: `src/temporal_interference/core/system.py:191`
 - Source of ramp log: `src/temporal_interference/services/manager.py:307`
-- Style reference: `scripts/split_log.py`, `scripts/copy_valid_tila_data.py`
+- Style reference: `scripts/analysis/02_split_log_by_day.py`, `scripts/analysis/01_copy_valid_sessions.py`
 - Example session: `backlogs_local_data/TILA_DATA_VALID/2026-01-26_T122/`
