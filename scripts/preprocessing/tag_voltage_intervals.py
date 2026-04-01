@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Domain dataclasses
+# Domain dataclass
 # ---------------------------------------------------------------------------
 
 
@@ -52,25 +52,8 @@ class TagConfig:
     channels: list[str] = field(default_factory=lambda: ["A1", "A2", "B1", "B2"])
     threshold_on: float = 3.0
     min_duration_min: float = 10.0
-    min_gap_min: float = 10.0
+    min_gap_min: float = 7.0
     zero_threshold: float = 0.01
-
-
-@dataclass(frozen=True)
-class ChannelResult:
-    """Result of interval detection for a single channel."""
-
-    channel: str
-    interval_count: int
-
-
-@dataclass(frozen=True)
-class SessionResult:
-    """Aggregated tagging result for a single session."""
-
-    session_name: str
-    channel_results: list[ChannelResult]
-    consensus_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -78,54 +61,48 @@ class SessionResult:
 # ---------------------------------------------------------------------------
 
 
-class CommentedCsvReader:
-    """Reads CSV files that contain leading ``#`` comment lines."""
+def read_commented_csv(csv_path: pathlib.Path) -> tuple[list[str], pd.DataFrame]:
+    """Return (comment_lines, dataframe) from a commented CSV."""
+    comments: list[str] = []
+    with open(csv_path, "r") as f:
+        for line in f:
+            if line.startswith("#"):
+                comments.append(line)
+            else:
+                break
 
-    def read(self, csv_path: pathlib.Path) -> tuple[list[str], pd.DataFrame]:
-        """Return (comment_lines, dataframe) from a commented CSV."""
-        comments: list[str] = []
-        with open(csv_path, "r") as f:
-            for line in f:
-                if line.startswith("#"):
-                    comments.append(line)
-                else:
-                    break
-
-        df = pd.read_csv(csv_path, comment="#", parse_dates=["timestamp"])
-        df = df.sort_values("timestamp").reset_index(drop=True)
-        return comments, df
-
-    @staticmethod
-    def parse_sampling_rate(comments: list[str]) -> float:
-        """Extract ``sampling_rate_hz`` from comment header lines.
-
-        Raises:
-            ValueError: if the header is absent or the value cannot be parsed.
-                        Re-run ``resample_voltages --force`` to regenerate input files.
-        """
-        for line in comments:
-            if line.startswith("# sampling_rate_hz:"):
-                try:
-                    return float(line.split(":", 1)[1].strip())
-                except ValueError:
-                    raise ValueError(f"Malformed sampling_rate_hz header: {line!r}")
-        raise ValueError(
-            "No '# sampling_rate_hz:' header found in input file. "
-            "Re-run resample_voltages --force to regenerate."
-        )
+    df = pd.read_csv(csv_path, comment="#", parse_dates=["timestamp"])
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    return comments, df
 
 
-class CommentedCsvWriter:
-    """Writes a DataFrame to CSV, prepending preserved comment lines."""
+def parse_sampling_rate(comments: list[str]) -> float:
+    """Extract ``sampling_rate_hz`` from comment header lines.
 
-    def write(
-        self, df: pd.DataFrame, comments: list[str], out_path: pathlib.Path
-    ) -> None:
-        """Write *df* to *out_path* with *comments* as a header."""
-        with open(out_path, "w", encoding="utf-8", newline="") as f:
-            for comment in comments:
-                f.write(comment)
-            df.to_csv(f, index=False)
+    Raises:
+        ValueError: if the header is absent or the value cannot be parsed.
+                    Re-run ``resample_voltages --force`` to regenerate input files.
+    """
+    for line in comments:
+        if line.startswith("# sampling_rate_hz:"):
+            try:
+                return float(line.split(":", 1)[1].strip())
+            except ValueError:
+                raise ValueError(f"Malformed sampling_rate_hz header: {line!r}")
+    raise ValueError(
+        "No '# sampling_rate_hz:' header found in input file. "
+        "Re-run resample_voltages --force to regenerate."
+    )
+
+
+def write_commented_csv(
+    df: pd.DataFrame, comments: list[str], out_path: pathlib.Path
+) -> None:
+    """Write *df* to *out_path* with *comments* as a header."""
+    with open(out_path, "w", encoding="utf-8", newline="") as f:
+        for comment in comments:
+            f.write(comment)
+        df.to_csv(f, index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -133,247 +110,244 @@ class CommentedCsvWriter:
 # ---------------------------------------------------------------------------
 
 
-class IntervalTagger:
-    """Detects and tags stimulation intervals in regularly-sampled voltage timeseries."""
+def tag_intervals(df: pd.DataFrame, cfg: TagConfig, fs: float) -> dict[str, int]:
+    """Tag all channel intervals and consensus on *df* in place.
 
-    def __init__(self, cfg: TagConfig, fs: float) -> None:
-        self._cfg = cfg
-        self._fs = fs
-        self._sample_period = 1.0 / fs
+    Durations and gaps are computed using index arithmetic at *fs* Hz.
 
-    def tag(self, df: pd.DataFrame) -> SessionResult:
-        """Tag all channel intervals and consensus on *df* in place.
+    Returns:
+        dict mapping each channel name and ``"consensus"`` to its interval count.
+    """
+    counts: dict[str, int] = {}
+    for ch in cfg.channels:
+        counts[ch] = _tag_channel(df, ch, cfg, fs)
 
-        Durations and gaps are computed using index arithmetic at ``self._fs`` Hz.
-        """
-        channel_results: list[ChannelResult] = []
-        for ch in self._cfg.channels:
-            count = self._tag_channel(df, ch)
-            channel_results.append(ChannelResult(channel=ch, interval_count=count))
+    counts["consensus"] = _compute_consensus(df, cfg)
+    return counts
 
-        consensus_count = self._compute_consensus(df)
-        return SessionResult(
-            session_name="",
-            channel_results=channel_results,
-            consensus_count=consensus_count,
-        )
 
-    def _tag_channel(self, df: pd.DataFrame, channel: str) -> int:
-        col = f"{channel}_interval"
-        df[col] = 0
+def _tag_channel(df: pd.DataFrame, channel: str, cfg: TagConfig, fs: float) -> int:
+    col = f"{channel}_interval"
+    df[col] = 0
 
-        if channel not in df.columns:
-            return 0
+    if channel not in df.columns:
+        return 0
 
-        raw_blocks = self._find_raw_on_blocks(df[channel])
-        merged = self._merge_blocks_by_gap(raw_blocks, df[channel])
+    raw_blocks = _find_raw_on_blocks(df[channel], cfg)
+    merged = _merge_blocks_by_gap(raw_blocks, df[channel], cfg, fs)
 
-        min_samples = int(self._cfg.min_duration_min * 60 * self._fs)
-        blocks = [
-            (s, e)
-            for s, e in merged
-            if (e - s) >= min_samples
-        ]
+    min_samples = int(cfg.min_duration_min * 60 * fs)
+    blocks = [
+        (s, e)
+        for s, e in merged
+        if (e - s) >= min_samples
+    ]
 
-        for idx, (s, e) in enumerate(blocks, start=1):
-            left, right = self._expand_to_zero(df, channel, s, e)
-            df.loc[left:right, col] = idx
+    for idx, (s, e) in enumerate(blocks, start=1):
+        left, right = _expand_to_zero(df, channel, s, e, cfg)
+        df.loc[left:right, col] = idx
 
-        return len(blocks)
+    return len(blocks)
 
-    def _find_raw_on_blocks(self, series: pd.Series) -> list[tuple[int, int]]:
-        is_on = series > self._cfg.threshold_on
-        transitions = is_on.astype(int).diff().fillna(0)
-        starts = series.index[transitions == 1].tolist()
-        ends = series.index[transitions == -1].tolist()
 
-        if is_on.iloc[0]:
-            starts = [0] + starts
-        if is_on.iloc[-1]:
-            ends = ends + [len(series) - 1]
+def _find_raw_on_blocks(series: pd.Series, cfg: TagConfig) -> list[tuple[int, int]]:
+    is_on = series > cfg.threshold_on
+    transitions = is_on.astype(int).diff().fillna(0)
+    starts = series.index[transitions == 1].tolist()
+    ends = series.index[transitions == -1].tolist()
 
-        return list(zip(starts, ends))
+    if is_on.iloc[0]:
+        starts = [0] + starts
+    if is_on.iloc[-1]:
+        ends = ends + [len(series) - 1]
 
-    def _has_sustained_zero_gap(
-        self,
-        series: pd.Series,
-        gap_start: int,
-        gap_end: int,
-    ) -> bool:
-        """Return True if [gap_start, gap_end] contains a sustained near-zero run.
+    return list(zip(starts, ends))
 
-        Uses sample counting against ``self._fs`` rather than timestamp arithmetic.
-        """
-        if gap_start >= gap_end:
-            return False
 
-        zero = self._cfg.zero_threshold
-        min_gap_samples = int(self._cfg.min_gap_min * 60 * self._fs)
+def _has_sustained_zero_gap(
+    series: pd.Series,
+    gap_start: int,
+    gap_end: int,
+    cfg: TagConfig,
+    fs: float,
+) -> bool:
+    """Return True if [gap_start, gap_end] contains a sustained near-zero run.
 
-        run_len = 0
-        for i in range(gap_start, gap_end + 1):
-            if series.iloc[i] <= zero:
-                run_len += 1
-                if run_len >= min_gap_samples:
-                    return True
-            else:
-                run_len = 0
-
+    Uses sample counting against *fs* rather than timestamp arithmetic.
+    """
+    if gap_start >= gap_end:
         return False
 
-    def _merge_blocks_by_gap(
-        self,
-        blocks: list[tuple[int, int]],
-        series: pd.Series,
-    ) -> list[tuple[int, int]]:
-        """Merge adjacent blocks that are not separated by a sustained zero gap."""
-        if not blocks:
-            return []
+    zero = cfg.zero_threshold
+    min_gap_samples = int(cfg.min_gap_min * 60 * fs)
 
-        merged = [blocks[0]]
-        for s_j, e_j in blocks[1:]:
-            s_i, e_i = merged[-1]
-            if self._has_sustained_zero_gap(series, e_i, s_j):
-                merged.append((s_j, e_j))
-            else:
-                merged[-1] = (s_i, e_j)
+    run_len = 0
+    for i in range(gap_start, gap_end + 1):
+        if series.iloc[i] <= zero:
+            run_len += 1
+            if run_len >= min_gap_samples:
+                return True
+        else:
+            run_len = 0
 
-        return merged
+    return False
 
-    def _expand_to_zero(
-        self, df: pd.DataFrame, channel: str, start: int, end: int
-    ) -> tuple[int, int]:
-        zero = self._cfg.zero_threshold
 
-        left = start
-        while left > 0 and df.loc[left, channel] > zero:
-            left -= 1
+def _merge_blocks_by_gap(
+    blocks: list[tuple[int, int]],
+    series: pd.Series,
+    cfg: TagConfig,
+    fs: float,
+) -> list[tuple[int, int]]:
+    """Merge adjacent blocks that are not separated by a sustained zero gap."""
+    if not blocks:
+        return []
 
-        right = end
-        while right < len(df) - 1 and df.loc[right, channel] > zero:
-            right += 1
+    merged = [blocks[0]]
+    for s_j, e_j in blocks[1:]:
+        s_i, e_i = merged[-1]
+        if _has_sustained_zero_gap(series, e_i, s_j, cfg, fs):
+            merged.append((s_j, e_j))
+        else:
+            merged[-1] = (s_i, e_j)
 
-        return left, right
+    return merged
 
-    def _compute_consensus(self, df: pd.DataFrame) -> int:
-        interval_cols = [
-            f"{ch}_interval"
-            for ch in self._cfg.channels
-            if f"{ch}_interval" in df.columns
-        ]
-        binary = (df[interval_cols].values > 0).astype(int)
-        active = (np.median(binary, axis=1) >= 0.5).astype(int)
 
-        consensus = np.zeros(len(df), dtype=int)
-        run_idx = 0
-        in_run = False
-        for i, val in enumerate(active):
-            if val and not in_run:
-                run_idx += 1
-                in_run = True
-            elif not val:
-                in_run = False
-            if in_run:
-                consensus[i] = run_idx
+def _expand_to_zero(
+    df: pd.DataFrame, channel: str, start: int, end: int, cfg: TagConfig
+) -> tuple[int, int]:
+    zero = cfg.zero_threshold
 
-        df["interval"] = consensus
-        return run_idx
+    left = start
+    while left > 0 and df.loc[left, channel] > zero:
+        left -= 1
+
+    right = end
+    while right < len(df) - 1 and df.loc[right, channel] > zero:
+        right += 1
+
+    return left, right
+
+
+def _compute_consensus(df: pd.DataFrame, cfg: TagConfig) -> int:
+    interval_cols = [
+        f"{ch}_interval"
+        for ch in cfg.channels
+        if f"{ch}_interval" in df.columns
+    ]
+    binary = (df[interval_cols].values > 0).astype(int)
+    active = (np.median(binary, axis=1) >= 0.5).astype(int)
+
+    consensus = np.zeros(len(df), dtype=int)
+    run_idx = 0
+    in_run = False
+    for i, val in enumerate(active):
+        if val and not in_run:
+            run_idx += 1
+            in_run = True
+        elif not val:
+            in_run = False
+        if in_run:
+            consensus[i] = run_idx
+
+    df["interval"] = consensus
+    return run_idx
 
 
 # ---------------------------------------------------------------------------
 # Plot saver
 # ---------------------------------------------------------------------------
 
+_INTERVAL_COLOURS: dict[int, str] = {1: "#ff7f0e", 2: "#1f77b4"}
+_INTERVAL_ALPHA = 0.25
+_CONSENSUS_COLOUR = "red"
+_CONSENSUS_OFFSET = 7.0
+_CONSENSUS_LINEWIDTH = 4.0
 
-class IntervalPlotSaver:
-    """Saves a diagnostic figure showing per-channel intervals and consensus."""
 
-    _INTERVAL_COLOURS: dict[int, str] = {1: "#ff7f0e", 2: "#1f77b4"}
-    _INTERVAL_ALPHA = 0.25
-    _CONSENSUS_COLOUR = "red"
-    _CONSENSUS_OFFSET = 7.0
-    _CONSENSUS_LINEWIDTH = 4.0
+def save_interval_plot(
+    df: pd.DataFrame, cfg: TagConfig, session_name: str, out_path: pathlib.Path
+) -> None:
+    """Save a diagnostic figure showing per-channel intervals and consensus."""
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
 
-    def __init__(self, cfg: TagConfig) -> None:
-        self._cfg = cfg
+    n_channels = len(cfg.channels)
+    fig, axes = plt.subplots(
+        n_channels, 1, figsize=(14, 2.5 * n_channels), sharex=True,
+    )
+    if n_channels == 1:
+        axes = [axes]
 
-    def save(self, df: pd.DataFrame, session_name: str, out_path: pathlib.Path) -> None:
-        import matplotlib.dates as mdates
-        import matplotlib.pyplot as plt
+    consensus_spans = _get_interval_spans(df, "interval")
+    y_bar = df[cfg.channels].max().max() + _CONSENSUS_OFFSET
 
-        n_channels = len(self._cfg.channels)
-        fig, axes = plt.subplots(
-            n_channels, 1, figsize=(14, 2.5 * n_channels), sharex=True,
-        )
-        if n_channels == 1:
-            axes = [axes]
+    for ax, ch in zip(axes, cfg.channels):
+        if ch in df.columns:
+            ax.plot(
+                df["timestamp"], df[ch],
+                color="black", drawstyle="steps-post", linewidth=0.6,
+            )
 
-        consensus_spans = self._get_interval_spans(df, "interval")
-        y_bar = df[self._cfg.channels].max().max() + self._CONSENSUS_OFFSET
+        col = f"{ch}_interval"
+        if col in df.columns:
+            _shade_intervals(ax, df, col)
 
-        for ax, ch in zip(axes, self._cfg.channels):
-            if ch in df.columns:
-                ax.plot(
-                    df["timestamp"], df[ch],
-                    color="black", drawstyle="steps-post", linewidth=0.6,
-                )
+        for span_start, span_end in consensus_spans:
+            ax.hlines(
+                y_bar, span_start, span_end,
+                colors=_CONSENSUS_COLOUR,
+                linewidth=_CONSENSUS_LINEWIDTH,
+                label=None,
+            )
 
-            col = f"{ch}_interval"
-            if col in df.columns:
-                self._shade_intervals(ax, df, col)
+        ax.set_ylabel(f"{ch} (V)")
+        ax.set_ylim(0, y_bar + _CONSENSUS_OFFSET * 0.5)
 
-            for span_start, span_end in consensus_spans:
-                ax.hlines(
-                    y_bar, span_start, span_end,
-                    colors=self._CONSENSUS_COLOUR,
-                    linewidth=self._CONSENSUS_LINEWIDTH,
-                    label=None,
-                )
+    axes[-1].set_xlabel("Time")
+    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    fig.suptitle(session_name, fontsize="large", fontweight="bold")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
 
-            ax.set_ylabel(f"{ch} (V)")
-            ax.set_ylim(0, y_bar + self._CONSENSUS_OFFSET * 0.5)
 
-        axes[-1].set_xlabel("Time")
-        axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-        fig.suptitle(session_name, fontsize="large", fontweight="bold")
-        fig.autofmt_xdate()
-        fig.tight_layout()
-        fig.savefig(out_path, dpi=150)
-        plt.close(fig)
-
-    def _get_interval_spans(
-        self, df: pd.DataFrame, col: str,
-    ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-        spans: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-        if col not in df.columns:
-            return spans
-        for interval_id in sorted(df[col].unique()):
-            if interval_id == 0:
-                continue
-            mask = df[col] == interval_id
-            indices = df.index[mask]
-            spans.append((df.loc[indices[0], "timestamp"], df.loc[indices[-1], "timestamp"]))
+def _get_interval_spans(
+    df: pd.DataFrame, col: str,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    spans: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    if col not in df.columns:
         return spans
+    for interval_id in sorted(df[col].unique()):
+        if interval_id == 0:
+            continue
+        mask = df[col] == interval_id
+        indices = df.index[mask]
+        spans.append((df.loc[indices[0], "timestamp"], df.loc[indices[-1], "timestamp"]))
+    return spans
 
-    def _shade_intervals(self, ax, df: pd.DataFrame, col: str) -> None:
-        for interval_id in sorted(df[col].unique()):
-            if interval_id == 0:
-                continue
-            colour = self._INTERVAL_COLOURS.get(interval_id, "gray")
-            mask = df[col] == interval_id
-            transitions = mask.astype(int).diff().fillna(0)
-            starts = df.index[transitions == 1].tolist()
-            ends = df.index[transitions == -1].tolist()
-            if mask.iloc[0]:
-                starts = [0] + starts
-            if mask.iloc[-1]:
-                ends = ends + [len(df) - 1]
-            for i, (s, e) in enumerate(zip(starts, ends)):
-                ax.axvspan(
-                    df.loc[s, "timestamp"], df.loc[e, "timestamp"],
-                    alpha=self._INTERVAL_ALPHA, color=colour,
-                    label=f"Interval {interval_id}" if i == 0 else None,
-                )
+
+def _shade_intervals(ax, df: pd.DataFrame, col: str) -> None:
+    for interval_id in sorted(df[col].unique()):
+        if interval_id == 0:
+            continue
+        colour = _INTERVAL_COLOURS.get(interval_id, "gray")
+        mask = df[col] == interval_id
+        transitions = mask.astype(int).diff().fillna(0)
+        starts = df.index[transitions == 1].tolist()
+        ends = df.index[transitions == -1].tolist()
+        if mask.iloc[0]:
+            starts = [0] + starts
+        if mask.iloc[-1]:
+            ends = ends + [len(df) - 1]
+        for i, (s, e) in enumerate(zip(starts, ends)):
+            ax.axvspan(
+                df.loc[s, "timestamp"], df.loc[e, "timestamp"],
+                alpha=_INTERVAL_ALPHA, color=colour,
+                label=f"Interval {interval_id}" if i == 0 else None,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -381,25 +355,27 @@ class IntervalPlotSaver:
 # ---------------------------------------------------------------------------
 
 
-def _format_result(result: SessionResult) -> list[str]:
-    lines: list[str] = []
-    for cr in result.channel_results:
-        status = "OK" if cr.interval_count == 2 else "WARNING"
+def _log_tagging_results(
+    session_name: str, counts: dict[str, int], channels: list[str]
+) -> None:
+    for ch in channels:
+        count = counts.get(ch, 0)
+        status = "OK" if count == 2 else "WARNING"
         detail = (
             "tagged with 2 intervals"
-            if cr.interval_count == 2
-            else f"has {cr.interval_count} intervals (expected 2)"
+            if count == 2
+            else f"has {count} intervals (expected 2)"
         )
-        lines.append(f"  {status} [{result.session_name}]: Channel {cr.channel} {detail}")
+        log.info("  %s [%s]: Channel %s %s", status, session_name, ch, detail)
 
-    status = "OK" if result.consensus_count == 2 else "WARNING"
+    consensus_count = counts.get("consensus", 0)
+    status = "OK" if consensus_count == 2 else "WARNING"
     detail = (
         "has 2 intervals"
-        if result.consensus_count == 2
-        else f"has {result.consensus_count} interval(s) (expected 2)"
+        if consensus_count == 2
+        else f"has {consensus_count} interval(s) (expected 2)"
     )
-    lines.append(f"  {status} [{result.session_name}]: consensus `interval` column {detail}")
-    return lines
+    log.info("  %s [%s]: consensus `interval` column %s", status, session_name, detail)
 
 
 # ---------------------------------------------------------------------------
@@ -447,9 +423,6 @@ def run_tag_voltage_intervals(
         return []
 
     cfg = TagConfig()
-    reader = CommentedCsvReader()
-    writer = CommentedCsvWriter()
-
     results: List[Path] = []
 
     for session_name, csv_path in csv_entries:
@@ -469,26 +442,18 @@ def run_tag_voltage_intervals(
 
         clean_task_outputs([tagged_csv] + extra_outputs)
 
-        comments, df = reader.read(csv_path)
-        fs = CommentedCsvReader.parse_sampling_rate(comments)
-        tagger = IntervalTagger(cfg, fs=fs)
-        plotter = IntervalPlotSaver(cfg) if save_plot else None
-        result = tagger.tag(df)
-        result = SessionResult(
-            session_name=session_name,
-            channel_results=result.channel_results,
-            consensus_count=result.consensus_count,
-        )
+        comments, df = read_commented_csv(csv_path)
+        fs = parse_sampling_rate(comments)
+        counts = tag_intervals(df, cfg, fs)
 
-        for line in _format_result(result):
-            log.info(line)
+        _log_tagging_results(session_name, counts, cfg.channels)
 
-        writer.write(df, comments, tagged_csv)
+        write_commented_csv(df, comments, tagged_csv)
         log.info("Saved: %s", tagged_csv)
 
-        if plotter is not None:
+        if save_plot:
             plot_path = session_out_dir / "voltages_tagged.png"
-            plotter.save(df, session_name, plot_path)
+            save_interval_plot(df, cfg, session_name, plot_path)
             log.info("Saved plot: %s", plot_path)
 
         results.append(tagged_csv)
