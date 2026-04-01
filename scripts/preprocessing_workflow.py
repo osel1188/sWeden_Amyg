@@ -1,94 +1,131 @@
 import logging
 from pathlib import Path
-from typing import List
 
 from utils.dag_config_handler import DagConfigHandler
 from utils.task_executor import TaskExecutor
 from utils.pipeline_monitor import PipelineMonitor
 
-from scripts.preprocessing import (
+from preprocessing import (
     run_filter_valid_sessions,
-    run_split_log_by_day,
     run_extract_session_data,
     run_validate_session_metadata,
+    run_resample_voltages,
     run_tag_voltage_intervals,
 )
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_BACKLOGS = _PROJECT_ROOT / "backlogs_local_data"
-
-_TASK_OUTPUT_DIRS = {
-    "filter_valid_sessions":    _BACKLOGS / "TILA_DATA_0_valid",
-    "split_log_by_day":         _BACKLOGS / "TILA_DATA_0_split",
-    "extract_session_data":     _BACKLOGS / "TILA_DATA_1_processed",
-    "validate_session_metadata": _BACKLOGS / "TILA_DATA_1_processed",
-    "tag_voltage_intervals":    _BACKLOGS / "TILA_DATA_1_processed",
-}
-
-_TASK_FUNCS = {
-    "filter_valid_sessions":    run_filter_valid_sessions,
-    "split_log_by_day":         run_split_log_by_day,
-    "extract_session_data":     run_extract_session_data,
-    "validate_session_metadata": run_validate_session_metadata,
-    "tag_voltage_intervals":    run_tag_voltage_intervals,
-}
-
-_AVAILABLE_TASKS = [
-    "filter_valid_sessions",
-    "split_log_by_day",
-    "extract_session_data",
-    "validate_session_metadata",
-    "tag_voltage_intervals",
-]
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def run_batch(
-    input_items: List[Path],
+def run_single_session_pipeline(
     dag_handler: DagConfigHandler,
     monitor: PipelineMonitor,
+    block_name: str,
 ) -> dict:
-    results = {}
-    current_items = input_items
+    backlogs = Path(dag_handler.get_parameter("project_root"))
+    excel_path_raw = dag_handler.get_parameter("excel_path")
+    excel_path = Path(excel_path_raw) if excel_path_raw else None
 
-    for task_name in _AVAILABLE_TASKS:
-        if task_name not in dag_handler.tasks or not dag_handler.tasks[task_name].get("enabled", False):
-            continue
+    tila_raw_data_dir = backlogs / "TILA_DATA_poc"
+    if tila_raw_data_dir.exists():
+        initial_inputs = sorted(p for p in tila_raw_data_dir.iterdir() if p.is_dir())
+    else:
+        logging.warning(f"Input directory not found: {tila_raw_data_dir}. Running with empty input.")
+        initial_inputs = []
 
-        task_func = _TASK_FUNCS[task_name]
-        output_dir = _TASK_OUTPUT_DIRS[task_name]
-        executor = TaskExecutor(task_name, task_name, dag_handler, monitor)
+    context = {
+        "raw_session_dirs": initial_inputs,
+        "excel_path": excel_path,
+        "backlogs": backlogs,
+    }
+
+    pipeline_stages = [
+        {"name": "filter_valid_sessions",
+         "func": run_filter_valid_sessions,
+         "params": lambda: {
+             "input_items": context.get("raw_session_dirs"),
+             "excel_path": context.get("excel_path"),
+             "output_dir": context["backlogs"] / "TILA_DATA_0_primary",
+         },
+         "outputs": ["valid_sessions"]},
+
+        {"name": "extract_session_data",
+         "func": run_extract_session_data,
+         "params": lambda: {
+             "input_items": context.get("valid_sessions"),
+             "output_dir": context["backlogs"] / "TILA_DATA_1_processed",
+         },
+         "outputs": ["extracted_voltages", "extracted_metadata"]},
+
+        {"name": "validate_session_metadata",
+         "func": run_validate_session_metadata,
+         "params": lambda: {
+             "input_metadata_paths": context.get("extracted_metadata"),
+             "excel_path": context.get("excel_path"),
+             "output_dir": context["backlogs"] / "TILA_DATA_1_processed",
+         },
+         "outputs": ["validated_report"]},
+
+        {"name": "resample_voltages",
+         "func": run_resample_voltages,
+         "params": lambda: {
+             "input_items": context.get("extracted_voltages"),
+             "output_dir": context["backlogs"] / "TILA_DATA_1_processed",
+         },
+         "outputs": ["resampled_voltages"]},
+
+        {"name": "tag_voltage_intervals",
+         "func": run_tag_voltage_intervals,
+         "params": lambda: {
+             "input_items": context.get("resampled_voltages"),
+             "output_dir": context["backlogs"] / "TILA_DATA_1_processed",
+         },
+         "outputs": ["tagged_sessions"]},
+    ]
+
+    for stage_idx, stage in enumerate(pipeline_stages):
+        task_name = stage["name"]
+        executor = TaskExecutor(task_name, block_name, dag_handler, monitor, session_name=block_name)
         with executor:
-            if executor.can_run:
-                options = dag_handler.get_task_options(task_name)
-                force = options.get("force_processing", False)
-                output_paths = task_func(current_items, output_dir=output_dir, force=force)
-                results[task_name] = output_paths
-                if output_paths:
-                    current_items = output_paths
+            if not executor.can_run:
+                continue
+            options = dag_handler.get_task_options(task_name)
+            params = stage["params"]()
+            force = options.get("force_processing")
+            if force is not None:
+                params["force"] = force
+            result = stage["func"](**params)
 
-    return results
+        # Store outputs in context
+        if "outputs" in stage:
+            outputs = stage["outputs"]
+            if not isinstance(result, tuple):
+                result = (result,)
+            for i, key in enumerate(outputs):
+                if key and i < len(result):
+                    context[key] = result[i]
+
+        # On error, skip remaining tasks
+        if task_name in dag_handler.tasks and executor.error_msg:
+            all_tasks = list(dag_handler.tasks.keys())
+            current_task_index = all_tasks.index(task_name)
+            for skipped_task in all_tasks[current_task_index + 1:]:
+                if monitor is not None:
+                    monitor.update(block_name, skipped_task, "SKIPPED", "Skipped due to prior failure.")
+            return {"status": "failed", "stage": stage_idx, "error": executor.error_msg}
+
+    return {"status": "success", "completed_tasks": list(dag_handler.completed_tasks)}
 
 
 def main():
-    dag_config_path = Path("F:/GitHub/sWeden_Amyg/config/preprocessing_workflow_dag.yaml")
-
-    if not dag_config_path.exists():
-        logging.error(f"DAG config not found: {dag_config_path}")
-        exit(1)
+    dag_config_path = _REPO_ROOT / "config" / "preprocessing_workflow_dag.yaml"
 
     dag_handler = DagConfigHandler(dag_config_path)
-    monitor = PipelineMonitor(_AVAILABLE_TASKS)
+    monitor = PipelineMonitor(list(dag_handler.tasks.keys()))
 
-    # Resolve initial inputs: all session folders under TILA_DATA/
-    tila_data_dir = _BACKLOGS / "TILA_DATA"
-    if tila_data_dir.exists():
-        input_items: List[Path] = sorted(p for p in tila_data_dir.iterdir() if p.is_dir())
-    else:
-        logging.warning(f"Input directory not found: {tila_data_dir}. Running with empty input.")
-        input_items = []
+    block_name = "preprocessing"
 
-    results = run_batch(input_items, dag_handler, monitor)
-    logging.info(f"Workflow complete. Results: {results}")
+    result = run_single_session_pipeline(dag_handler, monitor, block_name)
+    logging.info(f"Workflow complete. {result}")
 
 
 if __name__ == "__main__":
