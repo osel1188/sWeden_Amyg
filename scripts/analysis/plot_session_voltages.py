@@ -1,11 +1,11 @@
-"""Workflow task: batch-generate voltage timeline plots for all session CSVs.
+"""Workflow task: generate a voltage timeline plot for a single session CSV.
 
 Task contract
 -------------
-``run_plot_session_voltages(input_items, output_dir, force)`` follows the DAG
-task contract: receives a list of ``voltages_corrected.csv`` (or any voltage
-CSV) paths, writes one PNG per session to *output_dir*, and returns the list
-of PNG paths produced.
+``run_plot_session_voltages(input_csv, output_png)`` is a pure processor:
+receives a single voltage CSV path and the resolved output PNG path, writes
+the plot, and returns ``None``.  The workflow owns looping, idempotency, and
+path construction.
 
 Standalone use
 --------------
@@ -21,13 +21,10 @@ import logging
 import pathlib
 import sys
 from dataclasses import dataclass, field
-from typing import List
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
-
-from utils.should_process_task import should_process_task, clean_task_outputs
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
@@ -147,22 +144,18 @@ def _plot_split(
 
 
 def plot_session(
-    csv_path: pathlib.Path, output_dir: pathlib.Path, cfg: PlotConfig
-) -> pathlib.Path:
-    """Read a single session CSV and save a voltage timeline PNG.
-
-    Returns the path to the saved PNG.
-    """
+    csv_path: pathlib.Path, output_path: pathlib.Path, cfg: PlotConfig
+) -> None:
+    """Read a single session CSV and save a voltage timeline PNG."""
     session_name = csv_path.parent.name
     df = pd.read_csv(csv_path, comment="#", parse_dates=["timestamp"])
 
     fig = _plot_split(df, session_name, cfg) if cfg.split_channels else _plot_combined(df, session_name, cfg)
 
-    out_path = output_dir / f"{session_name}_voltages.png"
-    fig.savefig(out_path, dpi=100, bbox_inches="tight")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=100, bbox_inches="tight")
     plt.close(fig)
-    logging.info(f"  saved {out_path.name}")
-    return out_path
+    logging.info(f"  saved {output_path.name}")
 
 
 # ---------------------------------------------------------------------------
@@ -171,53 +164,24 @@ def plot_session(
 
 
 def run_plot_session_voltages(
-    input_items: List[pathlib.Path],
-    output_dir: pathlib.Path,
-    force: bool = False,
-) -> List[pathlib.Path]:
-    """Generate voltage timeline PNG for each session CSV in *input_items*.
+    input_csv: pathlib.Path,
+    output_png: pathlib.Path,
+) -> None:
+    """Generate a voltage timeline PNG for a single session CSV.
+
+    Pure processor: receives fully resolved paths, returns ``None``.
+    The workflow owns looping over sessions and idempotency checks.
 
     Parameters
     ----------
-    input_items:
-        List of voltage CSV paths (e.g. ``voltages_corrected.csv``).  Each
-        CSV is expected to live inside a session directory; the session
-        directory name is used as the plot title and output filename stem.
-    output_dir:
-        Directory where PNG files are written.
-    force:
-        When ``True``, regenerate even if the PNG is already up-to-date.
-
-    Returns
-    -------
-    list of Path
-        Paths to the PNG files produced (or already present when skipped).
+    input_csv:
+        Voltage CSV path (e.g. ``voltages_corrected.csv``).  The parent
+        directory name is used as the plot title.
+    output_png:
+        Fully resolved path where the PNG is written.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
     cfg = PlotConfig()
-    results: List[pathlib.Path] = []
-
-    for csv_path in input_items:
-        session_name = csv_path.parent.name
-        out_path = output_dir / f"{session_name}_voltages.png"
-
-        if not should_process_task(
-            input_paths=[csv_path],
-            output_paths=[out_path],
-            force=force,
-        ):
-            results.append(out_path)
-            continue
-
-        clean_task_outputs(out_path)
-
-        try:
-            produced = plot_session(csv_path, output_dir, cfg)
-            results.append(produced)
-        except Exception as exc:
-            logging.error(f"[plot_session_voltages] Failed for {csv_path}: {exc}")
-
-    return results
+    plot_session(input_csv, output_png, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +214,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    from utils.should_process_task import should_process_task, clean_task_outputs
+
     parser = _build_arg_parser()
     args = parser.parse_args()
 
@@ -262,9 +228,30 @@ def main() -> None:
         print("No voltages_corrected.csv files found under", args.input_dir, file=sys.stderr)
         sys.exit(1)
 
+    args.output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Found {len(csv_files)} corrected session(s). Generating plots...")
-    produced = run_plot_session_voltages(csv_files, args.output_dir, force=args.force)
-    print(f"\nDone. {len(produced)} PNG(s) in {args.output_dir}")
+
+    produced = 0
+    for csv_path in csv_files:
+        session_name = csv_path.parent.name
+        out_path = args.output_dir / f"{session_name}_voltages.png"
+
+        if not should_process_task(
+            input_paths=[csv_path],
+            output_paths=[out_path],
+            force=args.force,
+        ):
+            produced += 1
+            continue
+
+        clean_task_outputs(out_path)
+        try:
+            run_plot_session_voltages(csv_path, out_path)
+            produced += 1
+        except Exception as exc:
+            logging.error(f"[plot_session_voltages] Failed for {csv_path}: {exc}")
+
+    print(f"\nDone. {produced} PNG(s) in {args.output_dir}")
 
 
 if __name__ == "__main__":

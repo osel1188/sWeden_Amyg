@@ -2,10 +2,10 @@
 
 Task contract
 -------------
-``run_analyse_stim_intervals(input_items, output_dir, force)`` follows the DAG
-task contract: receives a list of session directories (or voltage CSV paths),
-writes ``interval_summary.csv`` and two comparison PNGs to *output_dir*, and
-returns the list of output paths produced.
+``run_analyse_stim_intervals(session_dirs, output_csv, output_duration_png,
+output_voltage_png)`` is a pure processor: receives session directories and
+fully resolved output paths, writes the summary CSV and comparison PNGs, and
+returns ``None``.  The workflow owns idempotency and path construction.
 
 The task prefers ``voltages_corrected.csv`` (human-verified boundaries),
 falls back to ``voltages_tagged.csv`` (auto-detected consensus), then to
@@ -22,13 +22,10 @@ import argparse
 import logging
 import pathlib
 import sys
-from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
-from utils.should_process_task import should_process_task, clean_task_outputs
 
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
@@ -209,6 +206,8 @@ def resolve_session_csv(
     session_dir: pathlib.Path,
 ) -> tuple[pathlib.Path | None, str]:
     """Find the best available voltage CSV for a session."""
+    if (session_dir / "discarded.flag").exists():
+        return None, "discarded"
     for filename, source in [
         ("voltages_corrected.csv", "corrected"),
         ("voltages_tagged.csv", "tagged"),
@@ -291,13 +290,10 @@ def extract_channel_stats(
 # ---------------------------------------------------------------------------
 
 
-def analyse_all_sessions(preprocess_dir: pathlib.Path) -> pd.DataFrame:
-    """Iterate all session directories and extract interval stats."""
-    session_dirs = sorted(
-        d for d in preprocess_dir.iterdir() if d.is_dir() and (d / "voltages.csv").exists()
-    )
+def analyse_all_sessions(session_dirs: list[pathlib.Path]) -> pd.DataFrame:
+    """Iterate *session_dirs* and extract interval stats."""
     if not session_dirs:
-        print(f"No session directories with voltages.csv found under {preprocess_dir}", file=sys.stderr)
+        logging.warning("No session directories provided — nothing to analyse.")
         return pd.DataFrame()
 
     rows = []
@@ -431,96 +427,40 @@ def plot_strip_comparison(
 
 
 def run_analyse_stim_intervals(
-    input_items: List[pathlib.Path],
-    output_dir: pathlib.Path,
-    force: bool = False,
-) -> List[pathlib.Path]:
-    """Analyse stimulation intervals from a list of session directories or voltage CSVs.
+    session_dirs: list[pathlib.Path],
+    output_csv: pathlib.Path,
+    output_duration_png: pathlib.Path,
+    output_voltage_png: pathlib.Path,
+) -> None:
+    """Analyse stimulation intervals across all sessions.
 
-    The function accepts either:
-    - A list of session *directories* (each containing a ``voltages.csv``), or
-    - A list of voltage *CSV paths* (the parent directory is used as the
-      session directory).
-
-    For each set of input sessions it writes:
-    - ``interval_summary.csv``
-    - ``interval_duration_comparison.png``
-    - ``interval_voltage_comparison.png``
+    Pure processor: receives fully resolved paths, returns ``None``.
+    The workflow owns idempotency and path construction.
 
     Parameters
     ----------
-    input_items:
-        Session directories or voltage CSV paths to analyse.
-    output_dir:
-        Directory where output files are written.
-    force:
-        When ``True``, rerun even if outputs are already up-to-date.
-
-    Returns
-    -------
-    list of Path
-        Paths to the output files produced (or already present when skipped).
+    session_dirs:
+        Session directories to analyse (each should contain a voltage CSV).
+    output_csv:
+        Path where ``interval_summary.csv`` is written.
+    output_duration_png:
+        Path where the duration comparison PNG is written.
+    output_voltage_png:
+        Path where the voltage comparison PNG is written.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
 
-    csv_out = output_dir / "interval_summary.csv"
-    duration_png = output_dir / "interval_duration_comparison.png"
-    voltage_png = output_dir / "interval_voltage_comparison.png"
-
-    all_outputs = [csv_out, duration_png, voltage_png]
-
-    # Resolve all input files for the idempotency check
-    input_csv_paths: list[pathlib.Path] = []
-    session_dirs: list[pathlib.Path] = []
-
-    for item in input_items:
-        if item.is_dir():
-            session_dirs.append(item)
-            for candidate in ("voltages_corrected.csv", "voltages_tagged.csv", "voltages.csv"):
-                p = item / candidate
-                if p.exists():
-                    input_csv_paths.append(p)
-                    break
-        else:
-            # Assume it's a CSV path
-            input_csv_paths.append(item)
-            session_dirs.append(item.parent)
-
-    if not input_csv_paths:
-        logging.warning("[analyse_stim_intervals] No input CSV paths resolved — nothing to do.")
-        return []
-
-    if not should_process_task(
-        input_paths=input_csv_paths,
-        output_paths=all_outputs,
-        force=force,
-    ):
-        return all_outputs
-
-    for p in all_outputs:
-        clean_task_outputs(p)
-
-    # Build a synthetic preprocess_dir: use the common parent if all sessions
-    # share one, otherwise iterate session_dirs directly.
-    parents = {d.parent for d in session_dirs}
-    if len(parents) == 1:
-        preprocess_dir = parents.pop()
-    else:
-        # Multiple parents: analyse all session_dirs by building a temporary
-        # view using the first common ancestor.
-        preprocess_dir = pathlib.Path(*pathlib.Path(session_dirs[0]).parts[:2])
-
-    print(f"Analysing sessions under {preprocess_dir}...")
-    summary_df = analyse_all_sessions(preprocess_dir)
+    logging.info("Analysing %d session(s)...", len(session_dirs))
+    summary_df = analyse_all_sessions(session_dirs)
 
     if summary_df.empty:
         logging.warning("[analyse_stim_intervals] No data extracted — outputs not written.")
-        return []
+        return
 
-    summary_df.to_csv(csv_out, index=False)
-    print(f"\nSaved {len(summary_df)} rows to {csv_out.name}")
+    summary_df.to_csv(output_csv, index=False)
+    logging.info("Saved %d rows to %s", len(summary_df), output_csv.name)
 
-    print("\nGenerating figures...")
+    logging.info("Generating figures...")
     np.random.seed(42)
 
     plot_strip_comparison(
@@ -528,18 +468,15 @@ def run_analyse_stim_intervals(
         metric="duration_min",
         ylabel="Duration (min)",
         title="Stimulation Block Duration by Channel",
-        output_path=duration_png,
+        output_path=output_duration_png,
     )
     plot_strip_comparison(
         summary_df,
         metric="median_voltage",
         ylabel="Median Voltage (V)",
         title="Stimulation Block Median Voltage by Channel",
-        output_path=voltage_png,
+        output_path=output_voltage_png,
     )
-
-    print(f"\nDone. Output in {output_dir}")
-    return all_outputs
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +511,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    from utils.should_process_task import should_process_task, clean_task_outputs
+
     parser = _build_arg_parser()
     args = parser.parse_args()
 
@@ -589,8 +528,30 @@ def main() -> None:
         print("No session directories with voltages.csv found under", args.preprocess_dir, file=sys.stderr)
         sys.exit(1)
 
-    produced = run_analyse_stim_intervals(session_dirs, args.output_dir, force=args.force)
-    if not produced:
+    output_csv = args.output_dir / "interval_summary.csv"
+    duration_png = args.output_dir / "interval_duration_comparison.png"
+    voltage_png = args.output_dir / "interval_voltage_comparison.png"
+    all_outputs = [output_csv, duration_png, voltage_png]
+
+    # Resolve input CSVs for idempotency check
+    input_csv_paths = []
+    for d in session_dirs:
+        csv_path, _source = resolve_session_csv(d)
+        if csv_path is not None:
+            input_csv_paths.append(csv_path)
+
+    if not should_process_task(
+        input_paths=input_csv_paths,
+        output_paths=all_outputs,
+        force=args.force,
+    ):
+        print("All outputs up-to-date — skipping.")
+        return
+
+    clean_task_outputs(all_outputs)
+    run_analyse_stim_intervals(session_dirs, output_csv, duration_png, voltage_png)
+
+    if not output_csv.exists():
         print("No outputs produced.", file=sys.stderr)
         sys.exit(1)
 
