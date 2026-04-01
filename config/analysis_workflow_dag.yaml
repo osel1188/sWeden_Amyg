@@ -1,0 +1,19 @@
+parameters:
+  project_root: "F:/liu-onedrive-nospecial-carac/_Teams/TILA/data/TI_logs_data"
+
+tasks:
+  plot_session_voltages:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+  analyse_stim_intervals:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+  sex_based_voltage_analysis:
+    enabled: true
+    options:
+      force_processing: true
+    depends_on: [analyse_stim_intervals]

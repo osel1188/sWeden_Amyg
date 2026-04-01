@@ -10,7 +10,7 @@ import pandas as pd
 from typing import Optional
 
 # Import the controller and API error types
-from participant import ParticipantAssignerAPI, AssignmentError, RepositoryError 
+from participant import ParticipantAssignerAPI, AssignmentError, ParticipantsListError 
 
 class ParticipantInfoWidget(QWidget):
     """
@@ -167,7 +167,15 @@ class ParticipantInfoWidget(QWidget):
         if user_data is not None:
             # A participant row was selected
             self.id_input.setText(user_data.ID)
-            self.sex_combo.setCurrentText(user_data.sex)
+            
+            # --- MODIFICATION: Map 'M'/'F' to 'Male'/'Female' ---
+            sex_value = user_data.sex
+            if sex_value == "M":
+                self.sex_combo.setCurrentText("Male")
+            elif sex_value == "F":
+                self.sex_combo.setCurrentText("Female")
+            # --- END MODIFICATION ---
+            
             self.id_input.setReadOnly(True)
             self.sex_combo.setEnabled(False)
         else:
@@ -228,7 +236,7 @@ class ParticipantInfoWidget(QWidget):
                     f"No available assignment rows found for sex: '{selected_sex}'."
                 )
 
-        except (AssignmentError, RepositoryError) as e:
+        except (AssignmentError, ParticipantsListError) as e:
             QMessageBox.critical(self, "API Error", f"A processing error occurred: {e}")
         except Exception as e:
             QMessageBox.critical(self, "Unexpected Error", f"An unexpected error occurred: {e}")

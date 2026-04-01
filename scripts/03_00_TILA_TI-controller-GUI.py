@@ -18,7 +18,8 @@ from temporal_interference.api import TIAPI
 from ui.main_window import ExperimentWindow  # Import the GUI window
 
 # NEW: Import participant API and related errors
-from participant import ParticipantAssignerAPI, ConfigError, RepositoryError
+from participant import ParticipantAssignerAPI, ConfigError, ParticipantsListError
+
 
 
 def main():
@@ -93,7 +94,7 @@ def main():
         logging.error(f"Invalid configuration or system state: {e}")
         print(f"Error: Invalid configuration or system state: {e}")
     # NEW: Catch errors from ParticipantAssignerAPI initialization
-    except (ConfigError, RepositoryError) as e:
+    except (ConfigError, ParticipantsListError) as e:
         logging.error(f"Failed to initialize Participant API: {e}")
         print(f"Error: Failed to initialize Participant API: {e}")
     except Exception as e:

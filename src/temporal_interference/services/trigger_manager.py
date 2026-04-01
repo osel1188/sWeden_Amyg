@@ -168,6 +168,13 @@ class TriggerManager:
                     logger.info(f"[State Monitor Thread] State change RUNNING -> IDLE. Starting {self.idle_debounce_s}s disable timer.")
                     self._idle_transition_time = time.time() # Start idle timer
 
+                    # Reset hardware state so a quick restart properly
+                    # re-enables channels and sends a fresh trigger.
+                    # The stop task already turned off channel outputs,
+                    # so _hardware_enabled must reflect that.
+                    self._hardware_enabled = False
+                    self.hw_manager.trigger_event.clear()
+
                 
                 # --- Check for Persistent IDLE State ---
                 if self._idle_transition_time is not None and current_hw_state == TIManagerState.IDLE:

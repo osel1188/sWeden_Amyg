@@ -27,6 +27,19 @@
                 "${file}::test_function_name"
             ],
             "justMyCode": true
+        },
+        {
+            "name": "Extract Log Data: Debug Session",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/analysis/03_extract_session_data.py",
+            "args": [
+                "backlogs_local_data/TILA_DATA_0_primary/2025-11-07_T81",
+                "-o",
+                "backlogs_local_data/TILA_DATA_1_processed"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
         }
     ]
 }

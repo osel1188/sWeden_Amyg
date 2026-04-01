@@ -1,3 +1,4 @@
-participants_list_file_path = C:\Users\basdu83\Documents\TILA_DATA\participants_list.xlsx
-condition_file_path = C:\Users\basdu83\Documents\TILA_DATA\participants_to_condition_list.xlsx
-save_dir_base_path = C:\Users\basdu83\Documents\TILA_DATA
+participants_list_file_path = F:\GitHub\sWeden_Amyg\cfg\participant_infos.xlsx
+condition_file_path = F:\GitHub\sWeden_Amyg\cfg\Excel_for_stimulators.xlsx
+save_dir_base_path = F:\GitHub\sWeden_Amyg\data
+
