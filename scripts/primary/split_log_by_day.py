@@ -113,7 +113,7 @@ def run_split_log_by_day(
             log.error("Cannot read %s: %s", input_path, exc)
             continue
 
-        expected_outputs = [output_dir / f"{k}.log" for k in keys]
+        expected_outputs: List[Path] = [Path(output_dir / f"{k}.log") for k in keys]
 
         if not should_process_task(
             input_paths=[input_path],
