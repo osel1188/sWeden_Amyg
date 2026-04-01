@@ -3,8 +3,8 @@
 Task contract:
     run_tag_voltage_intervals(input_items, output_dir, force=False) -> list[Path]
 
-input_items:  list of voltages.csv Paths to tag.  Session folders containing a
-              voltages.csv are also accepted.
+input_items:  list of voltages_resampled.csv Paths to tag.  Session folders
+              containing a voltages_resampled.csv are also accepted.
 output_dir:   directory where voltages_tagged.csv and optional PNG files are written.
               Each session's outputs are written to output_dir/<session_name>/.
 force:        when True, retag sessions whose outputs already exist.
@@ -397,11 +397,11 @@ def run_tag_voltage_intervals(
     force: bool = False,
     save_plot: bool = True,
 ) -> List[Path]:
-    """Tag stimulation intervals in each voltages.csv and write voltages_tagged.csv.
+    """Tag stimulation intervals in each voltages_resampled.csv and write voltages_tagged.csv.
 
     Args:
-        input_items:  voltages.csv Paths or session folder Paths containing a
-                      voltages.csv.
+        input_items:  voltages_resampled.csv Paths or session folder Paths
+                      containing a voltages_resampled.csv.
         output_dir:   Root output directory.  Each session's outputs go to
                       output_dir/<session_name>/.  When a session folder is
                       passed as input the tagged file is written alongside the
@@ -417,17 +417,17 @@ def run_tag_voltage_intervals(
     # Resolve input paths to (session_name, csv_path) pairs
     csv_entries: list[tuple[str, Path]] = []
     for item in sorted(input_items):
-        if item.is_file() and item.name == "voltages.csv":
+        if item.is_file() and item.name == "voltages_resampled.csv":
             csv_entries.append((item.parent.name, item))
         elif item.is_dir():
-            csv_path = item / "voltages.csv"
+            csv_path = item / "voltages_resampled.csv"
             if csv_path.exists():
                 csv_entries.append((item.name, csv_path))
             else:
-                log.warning("No voltages.csv in: %s", item)
+                log.warning("No voltages_resampled.csv in: %s", item)
 
     if not csv_entries:
-        log.warning("No voltages.csv files found in input_items.")
+        log.warning("No voltages_resampled.csv files found in input_items.")
         return []
 
     cfg = TagConfig()
@@ -496,7 +496,7 @@ def main() -> None:
     )
     parser.add_argument(
         "input_dir", nargs="?", type=Path, default=_DEFAULT_PREPROCESS_DIR,
-        help=f"Directory containing session folders with voltages.csv files (default: {_DEFAULT_PREPROCESS_DIR})",
+        help=f"Directory containing session folders with voltages_resampled.csv files (default: {_DEFAULT_PREPROCESS_DIR})",
     )
     parser.add_argument(
         "-o", "--output-dir", type=Path, default=None,
@@ -516,10 +516,10 @@ def main() -> None:
         raise SystemExit(f"Error: input directory not found: {args.input_dir}")
 
     output_dir = args.output_dir or args.input_dir
-    input_items = sorted(args.input_dir.glob("*/voltages.csv"))
+    input_items = sorted(args.input_dir.glob("*/voltages_resampled.csv"))
 
     if not input_items:
-        raise SystemExit(f"Error: no voltages.csv files found in {args.input_dir}")
+        raise SystemExit(f"Error: no voltages_resampled.csv files found in {args.input_dir}")
 
     results = run_tag_voltage_intervals(
         input_items=input_items,

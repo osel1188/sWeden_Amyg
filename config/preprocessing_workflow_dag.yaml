@@ -1,6 +1,6 @@
 parameters:
-  # Add workflow-specific parameters here
-  # example_param: value
+  project_root: "F:/liu-onedrive-nospecial-carac/_Teams/TILA/data/TI_logs_data"
+  excel_path: "F:/liu-onedrive-nospecial-carac/_Teams/TILA/data/TI_logs_data/Excel_for_stimulators.xlsx"
 
 tasks:
   filter_valid_sessions:
@@ -8,23 +8,27 @@ tasks:
     options:
       force_processing: false
     depends_on: []
-  split_log_by_day:
-    enabled: true
-    options:
-      force_processing: false
-    depends_on: [filter_valid_sessions]
+
   extract_session_data:
     enabled: true
     options:
-      force_processing: false
-    depends_on: [split_log_by_day]
+      force_processing: true
+    depends_on: [filter_valid_sessions]
+
   validate_session_metadata:
     enabled: true
     options:
       force_processing: false
     depends_on: [extract_session_data]
+
+  resample_voltages:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [extract_session_data]
+
   tag_voltage_intervals:
     enabled: true
     options:
       force_processing: false
-    depends_on: [validate_session_metadata]
+    depends_on: [validate_session_metadata, resample_voltages]

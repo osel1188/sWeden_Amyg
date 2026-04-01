@@ -16,7 +16,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 import pandas as pd
 
@@ -143,7 +143,7 @@ def _parse_participant_txt(session_dir: Path) -> dict:
     txt_files = [f for f in session_dir.glob("*T*.txt")]
     if not txt_files:
         return {"participant_id": None, "sex": None, "randomization_number": None}
-    result = {"participant_id": None, "sex": None, "randomization_number": None}
+    result: dict[str, Any] = {"participant_id": None, "sex": None, "randomization_number": None}
     with open(txt_files[0], "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             if line.startswith("Participant ID:"):
@@ -158,7 +158,7 @@ def _parse_participant_txt(session_dir: Path) -> dict:
 
 def parse_log_file(path: Path) -> dict:
     ramp_events: list[dict] = []
-    metadata: dict = {
+    metadata: dict[str, Any] = {
         "protocol": None,
         "protocol_description": None,
         "beat_frequency_hz": None,
@@ -421,10 +421,34 @@ def build_voltage_df(ramp_events: list[dict], round_digits: int | None = None) -
     for ev in ramp_events:
         voltage = round(float(ev["voltage"]), round_digits) if round_digits is not None else ev["voltage"]
         state[ev["channel"]] = voltage
-        ts = f"{ev['date']} {ev['time']}".replace(",", ".").split(".")[0]
+        ts = f"{ev['date']} {ev['time']}".replace(",", ".")
         rows.append({"timestamp": ts, **{ch: state[ch] for ch in CHANNELS}})
 
     return pd.DataFrame(rows)
+
+
+def _infer_protocol(metadata: dict, fmt: str) -> str:
+    """Infer 'active' or 'sham' from A1/A2 frequency difference.
+
+    Returns 'active' if A1 != A2, 'sham' otherwise (including when frequencies
+    are unavailable).
+    """
+    freqs = metadata.get("frequencies", {})
+    if fmt == "log":
+        a1, a2 = None, None
+        for side_freqs in freqs.values():
+            if isinstance(side_freqs, dict):
+                if "A1" in side_freqs:
+                    a1 = side_freqs["A1"]
+                if "A2" in side_freqs:
+                    a2 = side_freqs["A2"]
+    else:
+        a1 = freqs.get("A1")
+        a2 = freqs.get("A2")
+
+    if a1 is not None and a2 is not None and a1 != a2:
+        return "active"
+    return "sham"
 
 
 def _looks_like_session_folder(path: Path) -> bool:
@@ -466,8 +490,8 @@ def _process_session(
     source_path: Path,
     output_dir: Path,
     force: bool,
-) -> Path | None:
-    """Process one session and return the output voltages.csv path, or None on skip."""
+) -> tuple[Path, Path] | None:
+    """Process one session and return (voltages.csv, metadata.json) paths, or None on skip."""
     out_dir = output_dir / session_name
     out_csv = out_dir / "voltages.csv"
     json_path = out_dir / "metadata.json"
@@ -477,7 +501,7 @@ def _process_session(
         output_paths=[out_csv, json_path],
         force=force,
     ):
-        return out_csv
+        return out_csv, json_path
 
     clean_task_outputs([out_csv, json_path])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -489,6 +513,9 @@ def _process_session(
 
     metadata = result["metadata"]
     ramp_events = result["ramp_events"]
+
+    if metadata["protocol"] is None:
+        metadata["protocol"] = _infer_protocol(metadata, fmt)
 
     session_m = re.match(r"(\d{4}-\d{2}-\d{2})_(T?\d+)", session_name)
     if session_m:
@@ -550,7 +577,7 @@ def _process_session(
     else:
         log.info("%s: %d voltage rows", session_name, metadata["ramp_event_count"])
 
-    return out_csv
+    return out_csv, json_path
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +589,7 @@ def run_extract_session_data(
     input_items: List[Path],
     output_dir: Path,
     force: bool = False,
-) -> List[Path]:
+) -> tuple[List[Path], List[Path]]:
     """Extract voltages.csv and metadata.json for each session in *input_items*.
 
     Args:
@@ -573,7 +600,7 @@ def run_extract_session_data(
         force:        Reprocess sessions even if outputs already exist.
 
     Returns:
-        List of voltages.csv Paths produced (one per session found).
+        Tuple of (voltages_paths, metadata_paths) — one entry per session found.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -584,15 +611,18 @@ def run_extract_session_data(
 
     if not sessions:
         log.warning("No sessions found in input_items: %s", input_items)
-        return []
+        return [], []
 
-    results: List[Path] = []
+    voltages_paths: List[Path] = []
+    metadata_paths: List[Path] = []
     for session_name, fmt, source_path in sessions:
-        out_csv = _process_session(session_name, fmt, source_path, output_dir, force)
-        if out_csv is not None:
-            results.append(out_csv)
+        result = _process_session(session_name, fmt, source_path, output_dir, force)
+        if result is not None:
+            out_csv, json_path = result
+            voltages_paths.append(out_csv)
+            metadata_paths.append(json_path)
 
-    return results
+    return voltages_paths, metadata_paths
 
 
 # ---------------------------------------------------------------------------
