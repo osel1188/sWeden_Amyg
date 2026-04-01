@@ -24,7 +24,7 @@ tasks:
   resample_voltages:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [extract_session_data]
 
   tag_voltage_intervals:
@@ -32,3 +32,9 @@ tasks:
     options:
       force_processing: false
     depends_on: [validate_session_metadata, resample_voltages]
+
+  correct_intervals:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [tag_voltage_intervals]

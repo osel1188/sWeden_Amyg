@@ -11,6 +11,7 @@ from preprocessing import (
     run_validate_session_metadata,
     run_resample_voltages,
     run_tag_voltage_intervals,
+    run_correct_intervals,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -25,7 +26,7 @@ def run_single_session_pipeline(
     excel_path_raw = dag_handler.get_parameter("excel_path")
     excel_path = Path(excel_path_raw) if excel_path_raw else None
 
-    tila_raw_data_dir = backlogs / "TILA_DATA_poc"
+    tila_raw_data_dir = backlogs / "TILA_DATA"
     if tila_raw_data_dir.exists():
         initial_inputs = sorted(p for p in tila_raw_data_dir.iterdir() if p.is_dir())
     else:
@@ -80,6 +81,14 @@ def run_single_session_pipeline(
              "output_dir": context["backlogs"] / "TILA_DATA_1_processed",
          },
          "outputs": ["tagged_sessions"]},
+
+        {"name": "correct_intervals",
+         "func": run_correct_intervals,
+         "params": lambda: {
+             "input_items": context.get("tagged_sessions"),
+             "output_dir": context["backlogs"] / "TILA_DATA_1_processed",
+         },
+         "outputs": ["corrected_sessions"]},
     ]
 
     for stage_idx, stage in enumerate(pipeline_stages):
@@ -95,8 +104,8 @@ def run_single_session_pipeline(
                 params["force"] = force
             result = stage["func"](**params)
 
-        # Store outputs in context
-        if "outputs" in stage:
+        # Store outputs in context (only if the task succeeded)
+        if "outputs" in stage and not executor.error_msg:
             outputs = stage["outputs"]
             if not isinstance(result, tuple):
                 result = (result,)

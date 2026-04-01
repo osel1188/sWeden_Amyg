@@ -1,20 +1,31 @@
-"""Interactive GUI for manual correction of consensus interval boundaries.
+"""Interactive GUI for manual correction and validation of consensus interval boundaries.
 
-Reads the ``voltages_tagged.csv`` files produced by tag_voltage_intervals.py
-(which contain a consensus ``interval`` column), then for each session displays
-a matplotlib plot with draggable vertical lines marking Block 1 / Block 2 start
-and end.  The user can drag the markers then press *Continue* or ENTER to
-confirm.  Every session must be reviewed — there is no Skip.  Each session is
-saved as ``voltages_corrected.csv`` alongside the input file, with the
-``interval`` column rewritten to reflect the confirmed (or unmodified)
-boundaries.  Per-channel ``{ch}_interval`` columns are preserved unchanged.
+Reads ``voltages_tagged.csv`` files produced by ``tag_voltage_intervals`` (which
+contain a consensus ``interval`` column), then for each session displays a
+matplotlib plot with draggable vertical lines marking Block 1 / Block 2 start
+and end.  The user can drag the markers and then:
 
-Standalone helper — not part of the automated DAG.  Run directly:
+- Press **Validate** (or ENTER) to save corrections as ``voltages_corrected.csv``
+  and write ``validated.flag``.
+- Press **Discard** to mark the session as bad data — writes ``discarded.flag``
+  and removes any existing ``voltages_corrected.csv``.
+- Close the window (X button) to skip the session — no flag written, no output.
+
+Sessions with an existing ``validated.flag`` or ``discarded.flag`` are skipped
+on subsequent runs unless ``force=True``.
+
+Standalone use::
+
     python scripts/preprocessing/correct_intervals_gui.py
+    python scripts/preprocessing/correct_intervals_gui.py \\
+        --preprocess-dir /path/to/TILA_DATA_1_processed
 """
 
+import argparse
+import json
 import pathlib
 import sys
+from datetime import datetime
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -25,12 +36,6 @@ from matplotlib.widgets import Button
 
 CHANNELS = ["A1", "A2", "B1", "B2"]
 
-PREPROCESS_DIR = (
-    pathlib.Path(__file__).resolve().parent.parent.parent
-    / "backlogs_local_data"
-    / "TILA_DATA_1_processed"
-)
-
 CHANNEL_COLOURS = {
     "A1": "tab:blue",
     "A2": "tab:orange",
@@ -38,6 +43,38 @@ CHANNEL_COLOURS = {
     "B2": "tab:red",
 }
 BLOCK_COLOURS = {"Block 1": "#1f77b4", "Block 2": "#ff7f0e"}
+
+# Flag file names
+VALIDATED_FLAG = "validated.flag"
+DISCARDED_FLAG = "discarded.flag"
+
+
+# ---------------------------------------------------------------------------
+# Flag-file helpers
+# ---------------------------------------------------------------------------
+
+
+def write_flag(session_dir: pathlib.Path, flag_name: str) -> None:
+    """Write a JSON flag file to *session_dir*."""
+    flag_path = session_dir / flag_name
+    payload = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "source": "correct_intervals_gui",
+    }
+    flag_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def has_flag(session_dir: pathlib.Path, flag_name: str) -> bool:
+    """Return True if *flag_name* exists in *session_dir*."""
+    return (session_dir / flag_name).exists()
+
+
+def clear_flags(session_dir: pathlib.Path) -> None:
+    """Remove both validated and discarded flag files if present."""
+    for flag_name in (VALIDATED_FLAG, DISCARDED_FLAG):
+        flag_path = session_dir / flag_name
+        if flag_path.exists():
+            flag_path.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -118,12 +155,15 @@ def launch_correction_gui(
     session_name: str,
     df: pd.DataFrame,
     intervals: list[tuple[pd.Timestamp, pd.Timestamp, str]],
-) -> list[tuple[pd.Timestamp, pd.Timestamp, str]]:
-    """Show interactive plot for *session_name* and return corrected intervals.
+) -> tuple[list[tuple[pd.Timestamp, pd.Timestamp, str]], str]:
+    """Show interactive plot for *session_name* and return (corrected_intervals, action).
 
-    The user must press Continue (or ENTER) to proceed — there is no Skip.
+    *action* is one of:
+    - ``"validate"`` — user pressed Validate (or ENTER)
+    - ``"discard"``  — user pressed Discard
+    - ``"closed"``   — user closed the window without choosing
     """
-    result = {"intervals": intervals, "done": False}
+    result: dict = {"intervals": intervals, "action": "closed"}
 
     fig, ax = plt.subplots(figsize=(14, 6))
     fig.subplots_adjust(bottom=0.2)
@@ -145,7 +185,9 @@ def launch_correction_gui(
     ax.set_ylabel("Voltage (V)")
     ax.set_xlabel("Time")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-    ax.set_title(f"{session_name}  —  drag lines to adjust, then press Continue or ENTER")
+    ax.set_title(
+        f"{session_name}  —  drag lines to adjust, then press Validate or Discard"
+    )
     ax.grid(axis="y", linestyle="--", alpha=0.3)
     fig.autofmt_xdate()
 
@@ -177,15 +219,20 @@ def launch_correction_gui(
     ]
     ax.legend(handles=channel_handles + block_patches, fontsize="small", ncol=6, loc="upper right")
 
-    ax_b1 = fig.add_axes([0.18, 0.04, 0.13, 0.05])
-    ax_b2 = fig.add_axes([0.33, 0.04, 0.13, 0.05])
-    ax_continue = fig.add_axes([0.50, 0.04, 0.12, 0.05])
+    ax_b1 = fig.add_axes([0.13, 0.04, 0.12, 0.05])
+    ax_b2 = fig.add_axes([0.27, 0.04, 0.12, 0.05])
+    ax_validate = fig.add_axes([0.44, 0.04, 0.12, 0.05])
+    ax_discard = fig.add_axes([0.58, 0.04, 0.12, 0.05])
+
     btn_b1 = Button(ax_b1, "Reset Block 1", color=BLOCK_COLOURS["Block 1"], hovercolor=BLOCK_COLOURS["Block 1"])
     btn_b2 = Button(ax_b2, "Reset Block 2", color=BLOCK_COLOURS["Block 2"], hovercolor=BLOCK_COLOURS["Block 2"])
-    btn_continue = Button(ax_continue, "Continue")
+    btn_validate = Button(ax_validate, "Validate", color="#2ca02c", hovercolor="#2ca02c")
+    btn_discard = Button(ax_discard, "Discard", color="#ff7f0e", hovercolor="#ff7f0e")
 
     btn_b1.label.set_color("white")
     btn_b2.label.set_color("white")
+    btn_validate.label.set_color("white")
+    btn_discard.label.set_color("white")
 
     def _reset_block(block_label: str) -> None:
         colour = BLOCK_COLOURS.get(block_label, "gray")
@@ -211,21 +258,26 @@ def launch_correction_gui(
     def _on_b2(event=None):
         _reset_block("Block 2")
 
-    def _on_continue(event=None):
+    def _on_validate(event=None):
         corrected = []
-        for vl_start, vl_end, label, _span in draggables:
-            corrected.append((vl_start.value, vl_end.value, label))
+        for vl_s, vl_e, label, _span in draggables:
+            corrected.append((vl_s.value, vl_e.value, label))
         result["intervals"] = corrected
-        result["done"] = True
+        result["action"] = "validate"
+        plt.close(fig)
+
+    def _on_discard(event=None):
+        result["action"] = "discard"
         plt.close(fig)
 
     btn_b1.on_clicked(_on_b1)
     btn_b2.on_clicked(_on_b2)
-    btn_continue.on_clicked(_on_continue)
+    btn_validate.on_clicked(_on_validate)
+    btn_discard.on_clicked(_on_discard)
 
     def _on_key(event):
         if event.key == "enter":
-            _on_continue()
+            _on_validate()
 
     fig.canvas.mpl_connect("key_press_event", _on_key)
 
@@ -235,7 +287,7 @@ def launch_correction_gui(
         vl_start.disconnect()
         vl_end.disconnect()
 
-    return result["intervals"]
+    return result["intervals"], result["action"]
 
 
 # ---------------------------------------------------------------------------
@@ -286,33 +338,62 @@ def write_csv_with_comments(
 
 
 # ---------------------------------------------------------------------------
-# Main batch loop
+# Task contract
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    if not PREPROCESS_DIR.exists():
-        print(
-            f"ERROR: preprocess directory not found: {PREPROCESS_DIR}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+def run_correct_intervals(
+    input_items: list[pathlib.Path],
+    output_dir: pathlib.Path,
+    force: bool = False,
+) -> list[pathlib.Path]:
+    """Manually review and correct interval boundaries for each session.
 
-    tagged_files = sorted(PREPROCESS_DIR.glob("*/voltages_tagged.csv"))
-    if not tagged_files:
-        print(
-            f"No voltages_tagged.csv files found under {PREPROCESS_DIR}\n"
-            "Run tag_voltage_intervals.py first.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    Opens an interactive GUI for each session that does not yet have a
+    ``validated.flag`` or ``discarded.flag`` (or all sessions when *force*
+    is True).
 
-    print(f"Found {len(tagged_files)} session(s) to review. Close the window or press Ctrl+C to quit early.\n")
+    Parameters
+    ----------
+    input_items:
+        Paths to ``voltages_tagged.csv`` files (one per session).
+    output_dir:
+        Root processed directory.  Each corrected CSV is written alongside
+        its input file (``voltages_corrected.csv`` in the same session dir).
+    force:
+        Re-review all sessions even if already flagged; clears existing flags.
 
-    for csv_path in tagged_files:
-        session_name = csv_path.parent.name
+    Returns
+    -------
+    list[pathlib.Path]
+        Paths to the ``voltages_corrected.csv`` files that were written.
+    """
+    if not input_items:
+        print("[correct_intervals] No input files — nothing to review.")
+        return []
 
-        comments = []
+    corrected_paths: list[pathlib.Path] = []
+    counts = {"validated": 0, "discarded": 0, "skipped": 0, "closed": 0}
+
+    for csv_path in input_items:
+        session_dir = csv_path.parent
+        session_name = session_dir.name
+
+        # Skip logic
+        if not force and (
+            has_flag(session_dir, VALIDATED_FLAG) or has_flag(session_dir, DISCARDED_FLAG)
+        ):
+            print(f"  SKIP [{session_name}]: already flagged (use force=True to re-review)")
+            counts["skipped"] += 1
+            continue
+
+        if force:
+            clear_flags(session_dir)
+            corrected_csv = session_dir / "voltages_corrected.csv"
+            if corrected_csv.exists():
+                corrected_csv.unlink()
+
+        comments: list[str] = []
         with open(csv_path, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("#"):
@@ -324,29 +405,109 @@ def main() -> None:
         df = df.sort_values("timestamp").reset_index(drop=True)
 
         if "interval" not in df.columns:
-            print(f"  SKIP [{session_name}]: no `interval` column — re-run tag_voltage_intervals.py first")
+            print(f"  SKIP [{session_name}]: no `interval` column — re-run tag_voltage_intervals first")
+            counts["skipped"] += 1
             continue
 
         intervals = extract_boundaries(df)
 
         if not intervals:
             print(f"  SKIP [{session_name}]: 0 intervals detected in `interval` column")
+            counts["skipped"] += 1
             continue
 
         print(f"  [{session_name}]: {len(intervals)} interval(s) detected")
 
         try:
-            corrected_intervals = launch_correction_gui(session_name, df, intervals)
+            corrected_intervals, action = launch_correction_gui(session_name, df, intervals)
         except KeyboardInterrupt:
             print("\nInterrupted — stopping.")
             break
 
-        corrected_df = apply_corrections(df, corrected_intervals)
-        out_path = csv_path.parent / "voltages_corrected.csv"
-        write_csv_with_comments(corrected_df, out_path, comments)
-        print(f"  SAVED [{session_name}]: {out_path}")
+        if action == "validate":
+            corrected_df = apply_corrections(df, corrected_intervals)
+            out_path = session_dir / "voltages_corrected.csv"
+            write_csv_with_comments(corrected_df, out_path, comments)
+            write_flag(session_dir, VALIDATED_FLAG)
+            corrected_paths.append(out_path)
+            print(f"  VALIDATED [{session_name}]: {out_path}")
+            counts["validated"] += 1
 
-    print("\nDone.")
+        elif action == "discard":
+            corrected_csv = session_dir / "voltages_corrected.csv"
+            if corrected_csv.exists():
+                corrected_csv.unlink()
+            write_flag(session_dir, DISCARDED_FLAG)
+            print(f"  DISCARDED [{session_name}]: marked as bad data")
+            counts["discarded"] += 1
+
+        else:  # "closed"
+            print(f"  CLOSED [{session_name}]: no action taken")
+            counts["closed"] += 1
+
+    print(
+        f"\nReview summary: "
+        f"{counts['validated']} validated | "
+        f"{counts['discarded']} discarded | "
+        f"{counts['closed']} closed | "
+        f"{counts['skipped']} skipped"
+    )
+    return corrected_paths
+
+
+# ---------------------------------------------------------------------------
+# Standalone entry point
+# ---------------------------------------------------------------------------
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Manually review and correct stimulation interval boundaries."
+    )
+    parser.add_argument(
+        "--preprocess-dir",
+        type=pathlib.Path,
+        default=pathlib.Path(__file__).resolve().parent.parent.parent
+        / "backlogs_local_data"
+        / "TILA_DATA_1_processed",
+        help="Directory containing per-session subdirectories with voltages_tagged.csv.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-review sessions that already have a flag file.",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+
+    preprocess_dir: pathlib.Path = args.preprocess_dir
+
+    if not preprocess_dir.exists():
+        print(
+            f"ERROR: preprocess directory not found: {preprocess_dir}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    tagged_files = sorted(preprocess_dir.glob("*/voltages_tagged.csv"))
+    if not tagged_files:
+        print(
+            f"No voltages_tagged.csv files found under {preprocess_dir}\n"
+            "Run tag_voltage_intervals first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print(
+        f"Found {len(tagged_files)} session(s) to review. "
+        "Close the window or press Ctrl+C to quit early.\n"
+    )
+
+    run_correct_intervals(tagged_files, preprocess_dir, force=args.force)
 
 
 if __name__ == "__main__":
