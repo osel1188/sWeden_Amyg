@@ -28,13 +28,27 @@ Each workflow follows a 6-component architecture:
    and exposes `can_run()` to enforce the dependency chain.
 3. **`TaskExecutor`** — context manager that wraps each task: checks dependencies via
    `DagConfigHandler.can_run()`, logs status, catches errors, and marks completion.
-4. **`should_process_task()`** — file-level idempotency: returns `False` when all
-   outputs already exist and are newer than all inputs, so the task can be skipped.
+4. **`should_process_task()`** — file-level idempotency called by the **workflow**
+   before invoking a task. Returns `False` when all outputs already exist and are
+   newer than all inputs, so the task can be skipped.
 5. **`PipelineMonitor`** — records per-dataset, per-stage status
    (`RUNNING` / `SUCCESS` / `FAILURE`) for reporting.
-6. **`context` dict** — shared state that wires tasks together. Each task's return
-   values are stored under named keys; downstream tasks pull values via
-   `context.get("key")` in their `params` lambda.
+6. **`context` dict** — shared state that wires tasks together. The workflow stores
+   resolved output paths under named keys; downstream stages pull values via
+   `context.get("key")` in their `inputs` lambda.
+
+## The Task Philosophy
+
+**Tasks are pure processors that receive orders.** A task is a box with named
+input and output connectors. It reads from the paths it is given, processes the
+data, and writes to the paths it is given. That is all.
+
+The workflow is the single source of truth for:
+- **File discovery** — scanning directories, globbing for files
+- **Path construction** — building output filenames and directory structures
+- **Looping** — iterating over items, calling the task once per input/output pair
+- **Idempotency** — deciding whether the task needs to run (`should_process_task`)
+- **Force processing** — the `force_processing` flag is a workflow-level concern
 
 ## The Task Contract
 
@@ -43,61 +57,111 @@ Every pipeline task function follows this pattern:
 ```python
 def run_task_name(
     input_path: Path,
-    output_dir: Path,
-    *,
-    force_processing: bool = False,
-) -> Path:
+    output_path: Path,
+) -> None:
 ```
 
-- **Explicit named parameters**: each task declares the specific inputs it needs
-  (not a generic `List[Path]`). Parameter names are domain-specific.
-- **Keyword-only after `output_dir`**: use `*` to enforce named arguments for options.
-- **Returns `Path` or `tuple[Path, ...]`**: return values are stored in the context dict.
-- **`name_baseline`**: derive output file names from input stems
-  (e.g. `name_baseline = input_path.stem`, then `output_dir / (name_baseline + "_output.csv")`).
-- **`force_processing` and `monitor`**: injected by the executor loop from DAG options —
-  do not hardcode these in the `pipeline_stages` params lambda.
+- **Explicit named parameters**: each task declares the specific inputs and
+  outputs it needs. Parameter names are domain-specific.
+- **Fully resolved paths**: every input and output is an exact file path
+  provided by the workflow. No directory scanning, no filename construction.
+- **Returns `None`**: the workflow already knows the output paths (it provided
+  them), so the task does not need to return them.
+- **No idempotency**: the task does not call `should_process_task()`. The
+  workflow handles this before invoking the task.
+- **No force flag**: the task has no `force_processing` parameter. When
+  called, it always processes.
+- **Multiple outputs** (2 typical, 3 exceptional): each output is a separate
+  named parameter.
 
 ## The Pipeline Stages Pattern
 
 The workflow script wires tasks together using a `context` dict and a
-`pipeline_stages` list:
+`pipeline_stages` list. Each stage separates **inputs** (paths to read) from
+**outputs** (paths to write):
 
 ```python
 context = {
     # Seed values — initial inputs before any task runs
-    "source_path": Path("..."),
+    "source_csv": Path("..."),
 }
 
 pipeline_stages = [
     {"name": "task_one",
      "func": run_task_one,
-     "params": lambda: {
-         "input_path": context.get("source_path"),
-         "output_dir": Path("output/task_one"),
+     "inputs": lambda: {
+         "input_csv": context["source_csv"],
      },
-     "outputs": ["task_one_output"]},
+     "outputs": lambda: {
+         "output_csv": output_dir / session_name / "task_one_result.csv",
+     },
+     "store": ["output_csv"]},
 
     {"name": "task_two",
      "func": run_task_two,
-     "params": lambda: {
-         "input_path": context.get("task_one_output"),
-         "output_dir": Path("output/task_two"),
+     "inputs": lambda: {
+         "input_csv": context["output_csv"],
      },
-     "outputs": ["task_two_output"]},
+     "outputs": lambda: {
+         "result_csv": output_dir / session_name / "task_two_result.csv",
+     },
+     "store": ["result_csv"]},
 ]
 ```
 
 Each entry has:
 - **`name`** — must match the task name in the DAG YAML.
 - **`func`** — the task's `run_*` function.
-- **`params`** — a **lambda** that reads from `context` and returns a kwargs dict.
-  Using a lambda ensures values are resolved at call time, not at definition time.
-- **`outputs`** — list of context keys where return values are stored. Use `None`
-  to discard a positional return value (e.g. `["keep_this", None]`).
+- **`inputs`** — a **lambda** returning a dict of input parameter names to
+  resolved Paths. Read from `context` to wire upstream outputs.
+- **`outputs`** — a **lambda** returning a dict of output parameter names to
+  resolved Paths. The workflow constructs these paths.
+- **`store`** — list of output parameter names whose resolved paths should be
+  stored in the `context` dict for downstream stages. The parameter name
+  becomes the context key.
 
-The executor loop handles the rest: dependency checks, option injection,
+The executor loop handles the rest: idempotency checks, dependency enforcement,
 error propagation, and context storage.
+
+## The Executor Loop
+
+The executor loop calls `should_process_task()` before invoking each task,
+using the input and output paths declared in the stage:
+
+```python
+for stage_idx, stage in enumerate(pipeline_stages):
+    task_name = stage["name"]
+    executor = TaskExecutor(task_name, block_name, dag_handler, monitor)
+    with executor:
+        if not executor.can_run:
+            continue
+
+        inputs = stage["inputs"]()
+        outputs = stage["outputs"]()
+        input_paths = list(inputs.values())
+        output_paths = list(outputs.values())
+
+        options = dag_handler.get_task_options(task_name)
+        force = options.get("force_processing", False)
+
+        if not should_process_task(
+            input_paths=input_paths,
+            output_paths=output_paths,
+            force=force,
+        ):
+            # Store output paths in context even when skipped
+            for key in stage.get("store", []):
+                context[key] = outputs[key]
+            continue
+
+        clean_task_outputs(output_paths)
+        stage["func"](**inputs, **outputs)
+
+    # Store output paths in context for downstream stages
+    for key in stage.get("store", []):
+        outputs = stage["outputs"]()
+        context[key] = outputs[key]
+```
 
 ## Step-by-Step: Adding a New Task
 
@@ -116,39 +180,27 @@ Set `depends_on` to the task(s) that must complete first.
 
 ### 2. Create a pipeline module
 
-Create `scripts/<workflow>/your_new_task.py` with the idempotency pattern:
+Create `scripts/<workflow>/your_new_task.py` as a pure processor:
 
 ```python
 import logging
 from pathlib import Path
 
-from utils.should_process_task import should_process_task, clean_task_outputs
+log = logging.getLogger(__name__)
 
 
 def run_your_new_task(
-    input_path: Path,
-    output_dir: Path,
-    *,
-    force_processing: bool = False,
-) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    name_baseline = input_path.stem
-    output_path = output_dir / (name_baseline + "_your_new_task_output.csv")
-
-    if not should_process_task(
-        input_paths=[input_path],
-        output_paths=[output_path],
-        force=force_processing,
-    ):
-        return output_path
-
-    clean_task_outputs(output_path)
+    input_csv: Path,
+    output_csv: Path,
+) -> None:
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
 
     # TODO: implement processing logic
-    logging.info(f"Processing {input_path.name}")
-
-    return output_path
+    log.info("Processing %s -> %s", input_csv.name, output_csv.name)
 ```
+
+The task receives fully resolved paths and has no knowledge of idempotency,
+force flags, or filename construction.
 
 ### 3. Wire into the workflow script
 
@@ -159,27 +211,19 @@ pipeline_stages = [
     # ... existing stages ...
     {"name": "your_new_task",
      "func": run_your_new_task,
-     "params": lambda: {
-         "input_path": context.get("previous_task_output"),
-         "output_dir": Path("output/your_new_task"),
+     "inputs": lambda: {
+         "input_csv": context["previous_task_output"],
      },
-     "outputs": ["your_new_task_output"]},
+     "outputs": lambda: {
+         "output_csv": output_dir / session_name / "your_new_task_result.csv",
+     },
+     "store": ["output_csv"]},
 ]
 ```
 
-The `params` lambda reads from `context` — use the output key of the
-upstream task as the input. `outputs` names the key where the return
-value will be stored for downstream tasks.
-
-For tasks that return multiple values (tuples), list multiple output keys:
-```python
-"outputs": ["first_output", "second_output"]
-```
-
-Use `None` to discard a positional value:
-```python
-"outputs": ["keep_this", None]
-```
+The `inputs` lambda reads from `context` to wire upstream outputs.
+The `outputs` lambda constructs fully resolved output paths.
+`store` lists which output paths to save in `context` for downstream stages.
 
 ### 4. Export from `__init__.py`
 
@@ -205,46 +249,26 @@ from <workflow> import MyDataClass, my_utility_function
 - Domain models
 
 **What stays in the task module:**
-- Task-specific orchestration logic (the `run_*` function)
-- Idempotency checks (`should_process_task` / `clean_task_outputs`)
-- File I/O specific to that task's inputs and outputs
+- The `run_*` function — reads inputs, processes, writes outputs
+- Task-specific processing logic
 
-## Idempotency Pattern
-
-Every task must use `should_process_task()` and `clean_task_outputs()`:
-
-```python
-# Skip if output is up-to-date
-if not should_process_task(
-    input_paths=[input_path],
-    output_paths=[output_path],
-    force=force_processing,
-):
-    return output_path
-
-# Clean stale output before reprocessing
-clean_task_outputs(output_path)
-
-# ... do actual processing ...
-
-return output_path
-```
-
-- `should_process_task()` returns `False` when all outputs exist and are newer
-  than all inputs.
-- `clean_task_outputs()` deletes stale output files before reprocessing to
-  avoid partial or corrupt artifacts.
+**What does NOT belong in the task module:**
+- `should_process_task()` or `clean_task_outputs()` — workflow's concern
+- `force_processing` parameter — workflow's concern
+- Output filename construction — workflow's concern
+- File discovery or directory scanning — workflow's concern
 
 ## Important Rules
 
 - **No Prefect** — do not use `@flow` decorators or prefect imports.
-- **Tasks have explicit named parameters** — domain-specific signatures,
-  not generic `List[Path]`.
-- **Tasks return `Path` or `tuple[Path, ...]`** — stored in context dict.
-- **Wire through context** — use `context.get()` in `params` lambdas,
-  not direct variable passing.
-- **Use `name_baseline`** for output file naming — derive from input stems.
+- **Tasks are pure processors** — they read inputs, process, write outputs.
+  No idempotency, no force flag, no path construction.
+- **Tasks receive fully resolved paths** — every input and output is an exact
+  file path. No directory scanning, no glob, no `name_baseline`.
+- **Tasks return `None`** — the workflow already knows the output paths.
+- **Workflow owns orchestration** — file discovery, path construction, looping,
+  idempotency, and force processing all live in the workflow.
+- **Separate inputs from outputs** — use `inputs` and `outputs` lambdas in
+  `pipeline_stages`, not a single `params` dict.
 - **Linear dependency chain** by default — each task depends on the previous one.
   Override with custom `depends_on` lists for parallel branches.
-- **Always include idempotency** — `should_process_task()` + `clean_task_outputs()`
-  in every pipeline module.
