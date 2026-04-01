@@ -171,7 +171,7 @@ def run_resample_voltages(
     *,
     Fs_max: int = 20,
     force: bool = False,
-    monitor: bool = True,
+    monitor: bool = False,
 ) -> List[Path]:
     """Resample each voltages.csv to a regular grid and write voltages_resampled.csv.
 

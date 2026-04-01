@@ -52,7 +52,7 @@ class TagConfig:
     channels: list[str] = field(default_factory=lambda: ["A1", "A2", "B1", "B2"])
     threshold_on: float = 3.0
     min_duration_min: float = 10.0
-    min_gap_min: float = 7.0
+    min_gap_min: float = 5.0
     zero_threshold: float = 0.01
 
 

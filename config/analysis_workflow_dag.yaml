@@ -15,5 +15,5 @@ tasks:
   sex_based_voltage_analysis:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [analyse_stim_intervals]
