@@ -97,9 +97,9 @@ def extract_id_from_folder(folder_name: str) -> str | None:
 
 def run_filter_valid_sessions(
     input_items: List[Path],
+    excel_path: Path,
     output_dir: Path,
-    force: bool = False,
-    excel_path: Path | None = None,
+    force: bool = False
 ) -> List[Path]:
     """Copy session folders whose participant ID appears in *excel_path* to *output_dir*.
 
@@ -116,9 +116,6 @@ def run_filter_valid_sessions(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve Excel path
-    if excel_path is None:
-        excel_path = output_dir.parent / "Excel_for_stimulators.xlsx"
     if not excel_path.exists():
         raise FileNotFoundError(f"Excel file not found: {excel_path}")
 
