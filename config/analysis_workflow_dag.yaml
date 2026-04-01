@@ -1,6 +1,5 @@
 parameters:
-  # Add workflow-specific parameters here
-  # example_param: value
+  project_root: "F:/liu-onedrive-nospecial-carac/_Teams/TILA/data/TI_logs_data"
 
 tasks:
   plot_session_voltages:

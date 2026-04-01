@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import List
 
 from utils.dag_config_handler import DagConfigHandler
 from utils.task_executor import TaskExecutor
@@ -12,97 +11,109 @@ from scripts.analysis import (
     run_sex_based_voltage_analysis,
 )
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_BACKLOGS = _PROJECT_ROOT / "backlogs_local_data"
-_PROCESSED_DIR = _BACKLOGS / "TILA_DATA_1_processed"
-_ANALYSED_DIR = _BACKLOGS / "TILA_DATA_2_analysed"
-
-_TASK_OUTPUT_DIRS = {
-    "plot_session_voltages":    _ANALYSED_DIR / "voltage_tracker",
-    "analyse_stim_intervals":   _ANALYSED_DIR / "interval_analysis",
-    "sex_based_voltage_analysis": _ANALYSED_DIR / "sex_voltage_analysis",
-}
-
-_TASK_FUNCS = {
-    "plot_session_voltages":    run_plot_session_voltages,
-    "analyse_stim_intervals":   run_analyse_stim_intervals,
-    "sex_based_voltage_analysis": run_sex_based_voltage_analysis,
-}
-
-_AVAILABLE_TASKS = [
-    "plot_session_voltages",
-    "analyse_stim_intervals",
-    "sex_based_voltage_analysis",
-]
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _resolve_inputs(task_name: str, task_results: dict) -> List[Path]:
-    """Resolve input items for each task.
+def _resolve_voltage_csvs(processed_dir: Path) -> list[Path]:
+    """Find voltage CSVs, preferring corrected versions."""
+    csv_files = sorted(processed_dir.glob("*/voltages_corrected.csv"))
+    if not csv_files:
+        csv_files = sorted(processed_dir.glob("*/voltages.csv"))
+    return csv_files
 
-    - ``plot_session_voltages``: voltage CSVs from processed sessions.
-    - ``analyse_stim_intervals``: session directories from processed data.
-    - ``sex_based_voltage_analysis``: interval_summary.csv from analyse_stim_intervals.
-    """
-    if task_name == "plot_session_voltages":
-        csv_files = sorted(_PROCESSED_DIR.glob("*/voltages_corrected.csv"))
-        if not csv_files:
-            csv_files = sorted(_PROCESSED_DIR.glob("*/voltages.csv"))
-        return csv_files
 
-    if task_name == "analyse_stim_intervals":
-        if _PROCESSED_DIR.exists():
-            return sorted(p for p in _PROCESSED_DIR.iterdir() if p.is_dir())
-        return []
-
-    if task_name == "sex_based_voltage_analysis":
-        # Prefer output from analyse_stim_intervals if available in this run
-        prior = task_results.get("analyse_stim_intervals", [])
-        if prior:
-            return prior
-        # Fall back to default location
-        summary = _ANALYSED_DIR / "interval_analysis" / "interval_summary.csv"
-        return [summary] if summary.exists() else []
-
+def _resolve_session_dirs(processed_dir: Path) -> list[Path]:
+    """Find session directories under processed data."""
+    if processed_dir.exists():
+        return sorted(p for p in processed_dir.iterdir() if p.is_dir())
     return []
 
 
-def run_batch(
+def run_single_session_pipeline(
     dag_handler: DagConfigHandler,
     monitor: PipelineMonitor,
+    block_name: str,
 ) -> dict:
-    results = {}
+    backlogs = Path(dag_handler.get_parameter("project_root"))
+    processed_dir = backlogs / "TILA_DATA_1_processed"
+    analysed_dir = backlogs / "TILA_DATA_2_analysed"
 
-    for task_name in _AVAILABLE_TASKS:
-        if task_name not in dag_handler.tasks or not dag_handler.tasks[task_name].get("enabled", False):
-            continue
+    context = {
+        "voltage_csvs": _resolve_voltage_csvs(processed_dir),
+        "session_dirs": _resolve_session_dirs(processed_dir),
+        "analysed_dir": analysed_dir,
+    }
 
-        task_func = _TASK_FUNCS[task_name]
-        output_dir = _TASK_OUTPUT_DIRS[task_name]
-        input_items = _resolve_inputs(task_name, results)
+    pipeline_stages = [
+        {"name": "plot_session_voltages",
+         "func": run_plot_session_voltages,
+         "params": lambda: {
+             "input_items": context.get("voltage_csvs"),
+             "output_dir": context["analysed_dir"] / "voltage_tracker",
+         },
+         "outputs": ["voltage_plots"]},
 
-        executor = TaskExecutor(task_name, task_name, dag_handler, monitor)
+        {"name": "analyse_stim_intervals",
+         "func": run_analyse_stim_intervals,
+         "params": lambda: {
+             "input_items": context.get("session_dirs"),
+             "output_dir": context["analysed_dir"] / "interval_analysis",
+         },
+         "outputs": ["interval_results"]},
+
+        {"name": "sex_based_voltage_analysis",
+         "func": run_sex_based_voltage_analysis,
+         "params": lambda: {
+             "input_items": context.get("interval_results", context.get("session_dirs")),
+             "output_dir": context["analysed_dir"] / "sex_voltage_analysis",
+         },
+         "outputs": ["sex_voltage_results"]},
+    ]
+
+    for stage_idx, stage in enumerate(pipeline_stages):
+        task_name = stage["name"]
+        executor = TaskExecutor(task_name, block_name, dag_handler, monitor, session_name=block_name)
         with executor:
-            if executor.can_run:
-                options = dag_handler.get_task_options(task_name)
-                force = options.get("force_processing", False)
-                output_paths = task_func(input_items, output_dir=output_dir, force=force)
-                results[task_name] = output_paths
+            if not executor.can_run:
+                continue
+            options = dag_handler.get_task_options(task_name)
+            params = stage["params"]()
+            force = options.get("force_processing")
+            if force is not None:
+                params["force"] = force
+            result = stage["func"](**params)
 
-    return results
+        # Store outputs in context
+        if "outputs" in stage:
+            outputs = stage["outputs"]
+            if not isinstance(result, tuple):
+                result = (result,)
+            for i, key in enumerate(outputs):
+                if key and i < len(result):
+                    context[key] = result[i]
+
+        # On error, skip remaining tasks
+        if task_name in dag_handler.tasks and executor.error_msg:
+            all_tasks = list(dag_handler.tasks.keys())
+            current_task_index = all_tasks.index(task_name)
+            for skipped_task in all_tasks[current_task_index + 1:]:
+                if monitor is not None:
+                    monitor.update(block_name, skipped_task, "SKIPPED", "Skipped due to prior failure.")
+            return {"status": "failed", "stage": stage_idx, "error": executor.error_msg}
+
+    return {"status": "success", "completed_tasks": list(dag_handler.completed_tasks)}
 
 
 def main():
-    dag_config_path = Path("F:/GitHub/sWeden_Amyg/config/analysis_workflow_dag.yaml")
-
-    if not dag_config_path.exists():
-        logging.error(f"DAG config not found: {dag_config_path}")
-        exit(1)
+    dag_config_path = _REPO_ROOT / "config" / "analysis_workflow_dag.yaml"
 
     dag_handler = DagConfigHandler(dag_config_path)
-    monitor = PipelineMonitor(_AVAILABLE_TASKS)
+    monitor = PipelineMonitor(list(dag_handler.tasks.keys()))
 
-    results = run_batch(dag_handler, monitor)
-    logging.info(f"Workflow complete. Results: {results}")
+    block_name = "analysis"
+
+    result = run_single_session_pipeline(dag_handler, monitor, block_name)
+    logging.info(f"Workflow complete. {result}")
 
 
 if __name__ == "__main__":

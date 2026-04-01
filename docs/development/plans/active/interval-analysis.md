@@ -24,8 +24,8 @@ The 70 TILA sessions each produce voltage timeline plots (`plot_voltages.py`), b
 4. Generate two strip-plot figures (duration + voltage) with mean/STD overlay, split by interval
 
 ### Out of Scope
-- Modifying `plot_voltages.py` or `extract_log_data.py`
-- Per-session interval plots (already handled by `plot_voltages.py`)
+- Modifying `05_plot_session_voltages.py` or `03_extract_session_data.py`
+- Per-session interval plots (already handled by `05_plot_session_voltages.py`)
 - Statistical tests between conditions (active vs sham)
 - Correlating intervals with metadata (protocol type, participant)
 
@@ -62,7 +62,7 @@ This was chosen over per-channel detection because channels behave in synchrony 
 Single new standalone script following `plot_voltages.py` conventions:
 
 ```
-scripts/analyse_intervals.py          # New script
+scripts/analysis/06_analyse_stim_intervals.py          # New script
 backlogs_local_data/
   TILA_DATA_2_analysed/
     interval_analysis/                 # New output directory
@@ -85,7 +85,7 @@ backlogs_local_data/
 - [x] Task 1.4 — Implement `extract_channel_stats(df, start, end, channels)`: per-channel duration above threshold + time-weighted median voltage via 1-second resampling
 
 **Files Modified:**
-- `scripts/analyse_intervals.py` — New file, all core functions
+- `scripts/analysis/06_analyse_stim_intervals.py` — New file, all core functions
 
 **Dependencies:** None
 
@@ -98,7 +98,7 @@ backlogs_local_data/
 - [x] Task 2.3 — Handle edge cases: print warnings for sessions with !=2 blocks, set `status` column (ok/merged/single_block/skipped)
 
 **Files Modified:**
-- `scripts/analyse_intervals.py` — Add batch processing and main entry point
+- `scripts/analysis/06_analyse_stim_intervals.py` — Add batch processing and main entry point
 
 **Dependencies:** Phase 1
 
@@ -112,7 +112,7 @@ backlogs_local_data/
 - [x] Task 3.4 — Add slight horizontal jitter on strip points to avoid overlap
 
 **Files Modified:**
-- `scripts/analyse_intervals.py` — Add plotting function and calls in `main()`
+- `scripts/analysis/06_analyse_stim_intervals.py` — Add plotting function and calls in `main()`
 
 **Dependencies:** Phase 2
 
@@ -142,7 +142,7 @@ backlogs_local_data/
 
 ## Rollback Plan
 
-1. Delete `scripts/analyse_intervals.py`
+1. Delete `scripts/analysis/06_analyse_stim_intervals.py`
 2. Delete `backlogs_local_data/TILA_DATA_2_analysed/interval_analysis/` directory
 3. No other files are modified
 
