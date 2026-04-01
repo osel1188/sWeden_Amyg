@@ -31,8 +31,8 @@ import pandas as pd
 
 from utils.should_process_task import should_process_task, clean_task_outputs
 from preprocessing.tag_voltage_intervals import (
-    CommentedCsvReader,
-    CommentedCsvWriter,
+    read_commented_csv,
+    write_commented_csv,
 )
 
 log = logging.getLogger(__name__)
@@ -204,8 +204,6 @@ def run_resample_voltages(
         log.warning("No voltages.csv files found in input_items.")
         return []
 
-    reader = CommentedCsvReader()
-    writer = CommentedCsvWriter()
     results: List[Path] = []
 
     for session_name, csv_path in csv_entries:
@@ -224,7 +222,7 @@ def run_resample_voltages(
 
         clean_task_outputs([out_path])
 
-        comments, df = reader.read(csv_path)
+        comments, df = read_commented_csv(csv_path)
 
         try:
             fs = compute_sampling_rate(df, CHANNELS, Fs_max=Fs_max)
@@ -245,7 +243,7 @@ def run_resample_voltages(
         if monitor:
             _plot_resampled(session_name, resampled_df, CHANNELS)
 
-        writer.write(resampled_df, [], out_path)
+        write_commented_csv(resampled_df, [f"# sampling_rate_hz: {fs}\n"], out_path)
         log.info("Saved: %s (%d rows)", out_path, len(resampled_df))
 
         results.append(out_path)
