@@ -90,10 +90,10 @@ def is_valid(condition: str, a1, a2, b1, b2) -> bool | None:
 
 
 def run_validate_session_metadata(
-    input_items: List[Path],
+    input_metadata_paths: List[Path],
+    excel_path: Path,
     output_dir: Path,
     force: bool = False,
-    excel_path: Path | None = None,
 ) -> List[Path]:
     """Validate frequency metadata for each session and write a CSV report.
 
@@ -114,7 +114,7 @@ def run_validate_session_metadata(
 
     # Resolve metadata.json paths
     metadata_files: list[Path] = []
-    for item in sorted(input_items):
+    for item in sorted(input_metadata_paths):
         if item.is_file() and item.name == "metadata.json":
             metadata_files.append(item)
         elif item.is_dir():
@@ -138,9 +138,6 @@ def run_validate_session_metadata(
 
     clean_task_outputs([output_csv])
 
-    # Resolve Excel path
-    if excel_path is None:
-        excel_path = output_dir.parent / "Excel_for_stimulators.xlsx"
     if not excel_path.exists():
         raise FileNotFoundError(f"Excel file not found: {excel_path}")
 
@@ -257,10 +254,10 @@ def main() -> None:
         raise SystemExit(f"Error: no metadata.json files found in {args.input_dir}")
 
     results = run_validate_session_metadata(
-        input_items=input_items,
-        output_dir=args.output_dir,
-        force=args.force,
+        input_metadata_paths=input_items,
         excel_path=args.excel,
+        output_dir=args.output_dir,
+        force=args.force
     )
     if results:
         print(f"Done. Report written to {results[0]}")

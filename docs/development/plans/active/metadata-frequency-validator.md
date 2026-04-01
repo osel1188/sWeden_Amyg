@@ -35,7 +35,7 @@ Create a standalone Python script that reads the Excel condition assignments and
 
 ### Approach
 
-Single script `scripts/validate_metadata.py` using pandas + openpyxl (already in requirements.txt). The script:
+Single script `scripts/analysis/04_validate_session_metadata.py` using pandas + openpyxl (already in requirements.txt). The script:
 
 1. Loads Excel → builds a `{participant_id: condition}` dict
 2. Globs `TILA_DATA_1_processed/*/metadata.json`
@@ -74,14 +74,14 @@ def is_valid(condition, a1, a2, b1, b2):
 ```
 
 ### Key files to reuse
-- `scripts/copy_valid_tila_data.py` — already reads participant IDs from the same Excel file (uses zipfile+xml approach, but we'll use pandas/openpyxl for simplicity since it's already a dependency)
+- `scripts/analysis/01_copy_valid_sessions.py` — already reads participant IDs from the same Excel file (uses zipfile+xml approach, but we'll use pandas/openpyxl for simplicity since it's already a dependency)
 
 ## Implementation Plan
 
 ### Phase 1: Single script
 **Goal:** Complete working script
 
-- [x] Create `scripts/validate_metadata.py`
+- [x] Create `scripts/analysis/04_validate_session_metadata.py`
 - [x] Read Excel with pandas, extract ID and condition columns
 - [x] Glob metadata files, parse JSON, extract frequencies (both formats)
 - [x] Match participants between Excel and metadata by ID
@@ -90,7 +90,7 @@ def is_valid(condition, a1, a2, b1, b2):
 - [x] Print summary (total, valid, invalid counts)
 
 **Files Created:**
-- `scripts/validate_metadata.py` — The validation script
+- `scripts/analysis/04_validate_session_metadata.py` — The validation script
 
 **Output file:**
 - `backlogs_local_data/metadata_validation_report.csv`
